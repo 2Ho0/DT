@@ -65,7 +65,6 @@ class TrajectoryDataset(Dataset):
     def load_trajectories(self) -> None:
         traj_reader = TrajectoryReader(self.trajectory_path)
         data = traj_reader.read()
-
         observations = data["data"].get("observations")
         actions = data["data"].get("actions")
         rewards = data["data"].get("rewards")
@@ -138,6 +137,10 @@ class TrajectoryDataset(Dataset):
         self.act_dim = list(self.actions[0][0].shape)
         self.max_ep_len = max([len(i) for i in self.states])
         self.metadata = data["metadata"]
+        task_id = data.get("metadata").get("task_id")
+        self.task_ids = [task_id] * self.num_trajectories
+        print(f"Loaded {len(self.task_ids)} task_ids for {self.num_trajectories} trajectories")
+        print("Example task_id:", self.task_ids[0])
 
         self.indices = self.get_indices_of_top_p_trajectories(self.pct_traj)
         self.sampling_probabilities = self.get_sampling_probabilities()
@@ -352,7 +355,13 @@ class TrajectoryDataset(Dataset):
         if self.preprocess_observations is not None:
             s = self.preprocess_observations(s)
 
-        return s, a, r, d, rtg, ti, m
+        task_id = self.task_ids[traj_index]
+
+        if any(x is None for x in [s, a, r, d, rtg, ti, m, task_id]):
+            print(f"[ERROR] None found in __getitem__ result at idx {idx}")
+            print("task_id:", task_id)
+            raise ValueError("NoneType in dataset sample")
+        return s, a, r, d, rtg, ti, m, task_id
 
 
 class TrajectoryVisualizer:

@@ -73,6 +73,11 @@ class TrajectoryWriter:
             self.rtg.append(rtg)
         self.infos.append(info)
 
+    def add_metadata(self, extra_metadata: Dict):
+        if not hasattr(self, "extra_metadata"):
+            self.extra_metadata = {}
+        self.extra_metadata.update(extra_metadata)
+
     def tag_terminated_trajectories(self):
         """
         Tag the last trajectory in each batch as done.
@@ -86,14 +91,29 @@ class TrajectoryWriter:
         for i in range(n_envs):
             self.truncated[-1][i] = True
 
+    def reset(self):
+        """
+        Clear all currently accumulated trajectory data.
+        Useful after writing to file.
+        """
+        self.observations.clear()
+        self.actions.clear()
+        self.rewards.clear()
+        self.dones.clear()
+        self.truncated.clear()
+        self.rtg.clear()
+        self.infos.clear()
+        if hasattr(self, "extra_metadata"):
+            self.extra_metadata.clear()
+            
     def write(self, upload_to_wandb: bool = False):
         data = {
-            "observations": np.array(self.observations, dtype=np.float),
+            "observations": np.array(self.observations, dtype=np.float32),
             "actions": np.array(self.actions, dtype=np.int64),
-            "rewards": np.array(self.rewards, dtype=np.float),
+            "rewards": np.array(self.rewards, dtype=np.float32),
             "dones": np.array(self.dones, dtype=bool),
             "truncated": np.array(self.truncated, dtype=bool),
-            "rtgs": np.array(self.rtg, dtype=np.float),
+            "rtgs": np.array(self.rtg, dtype=np.float32),
             "infos": np.array(self.infos, dtype=object),
         }
         if dataclasses.is_dataclass(self.args):
@@ -102,11 +122,18 @@ class TrajectoryWriter:
                 "args": json.dumps(self.args, cls=ConfigJsonEncoder),
                 "time": time.time(),  # Time of writing
             }
+            
         else:
             metadata = {
                 "args": self.args,  # Args such as ppo args
                 "time": time.time(),  # Time of writing
             }
+
+        if hasattr(self, "extra_metadata") and isinstance(self.extra_metadata, dict):
+            metadata.update(self.extra_metadata)
+
+        if "task_id" not in metadata:
+            print("[WARNING] task_id is missing in metadata! This trajectory will load with None.")
 
         if not os.path.exists(os.path.dirname(self.path)):
             os.makedirs(os.path.dirname(self.path))
@@ -117,7 +144,7 @@ class TrajectoryWriter:
             with lzma.open(self.path, "wb") as f:
                 pickle.dump({"data": data, "metadata": metadata}, f)
         elif self.path.endswith(".gz"):
-            print(f"Writing to {self.path}, using gzip compression")
+            # print(f"Writing to {self.path}, using gzip compression")
             with gzip.open(self.path, "wb") as f:
                 pickle.dump({"data": data, "metadata": metadata}, f)
         else:
@@ -132,4 +159,3 @@ class TrajectoryWriter:
             artifact.add_file(self.path)
             wandb.log_artifact(artifact)
 
-        print(f"Trajectory written to {self.path}")

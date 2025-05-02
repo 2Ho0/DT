@@ -16,7 +16,6 @@ from src.config import (
 )
 from src.environments.registration import register_envs
 from src.models.trajectory_transformer import (
-    CloneTransformer,
     DecisionTransformer,
 )
 
@@ -51,37 +50,47 @@ def run_decision_transformer(
         if not offline_config.convert_to_one_hot
         else one_hot_encode_observation
     )
-    trajectory_data_set = TrajectoryDataset(
-        trajectory_path=offline_config.trajectory_path,
-        max_len=max_len,
-        pct_traj=offline_config.pct_traj,
-        prob_go_from_end=offline_config.prob_go_from_end,
-        device=device,
-        preprocess_observations=preprocess_observations,
-    )
+
+    trajectory_paths = offline_config.trajectory_path
+    task_datasets = {}
+    for i, path in enumerate(trajectory_paths):
+        dataset = TrajectoryDataset(
+            trajectory_path=path,
+            max_len=max_len,
+            pct_traj=offline_config.pct_traj,
+            prob_go_from_end=offline_config.prob_go_from_end,
+            device=device,
+            preprocess_observations=preprocess_observations,
+        )
+        dataset.task_id = i  # 🟢 각 task에 고유 id 부여
+        task_datasets[f"task_{i}"] = dataset
+
+    
 
     # ensure all the environments we need are registered
     register_envs()
 
-    # make an environment
-    env_id = trajectory_data_set.metadata["args"]["env_id"]
-    # pretty print the metadata
-    print(trajectory_data_set.metadata)
+    # 🟢 대표 task 하나 선택 (예: task_0)
+    first_task_key = list(task_datasets.keys())[0]
+    first_dataset = task_datasets[first_task_key]
 
-    if "view_size" not in trajectory_data_set.metadata["args"]:
-        trajectory_data_set.metadata["args"]["view_size"] = 7
+    # 환경 ID 및 설정
+    env_id = first_dataset.metadata["args"]["env_id"]
+    print(first_dataset.metadata)
+
+    if "view_size" not in first_dataset.metadata["args"]:
+        first_dataset.metadata["args"]["view_size"] = 7
 
     environment_config = EnvironmentConfig(
-        env_id=trajectory_data_set.metadata["args"]["env_id"],
-        one_hot_obs=trajectory_data_set.observation_type == "one_hot",
-        view_size=trajectory_data_set.metadata["args"]["view_size"],
+        env_id=env_id,
+        one_hot_obs=first_dataset.observation_type == "one_hot",
+        view_size=first_dataset.metadata["args"]["view_size"],
         fully_observed=False,
         capture_video=False,
         render_mode="rgb_array",
     )
 
-    env = make_env(environment_config, seed=0, idx=0, run_name="dev")
-    env = env()
+    env = make_env(environment_config, seed=0, idx=0, run_name="dev")()
 
     wandb_args = (
         run_config.__dict__
@@ -97,29 +106,24 @@ def run_decision_transformer(
             name=run_name,
             config=wandb_args,
         )
-        trajectory_visualizer = TrajectoryVisualizer(trajectory_data_set)
+        trajectory_visualizer = TrajectoryVisualizer(first_dataset)
         fig = trajectory_visualizer.plot_reward_over_time()
         wandb.log({"dataset/reward_over_time": wandb.Plotly(fig)})
         fig = trajectory_visualizer.plot_base_action_frequencies()
         wandb.log({"dataset/base_action_frequencies": wandb.Plotly(fig)})
-        wandb.log(
-            {"dataset/num_trajectories": trajectory_data_set.num_trajectories}
-        )
+        wandb.log({"dataset/num_trajectories": first_dataset.num_trajectories})
 
-    if offline_config.model_type == "decision_transformer":
-        model = DecisionTransformer(
-            environment_config=environment_config,
-            transformer_config=transformer_config,
-        )
-    else:
-        model = CloneTransformer(
-            environment_config=environment_config,
-            transformer_config=transformer_config,
-        )
+
+    model = DecisionTransformer(
+        environment_config=environment_config,
+        transformer_config=transformer_config,
+        num_tasks = 3
+    )
+   
 
     model = train(
         model=model,
-        trajectory_data_set=trajectory_data_set,
+        trajectory_data_set=task_datasets,
         env=env,
         make_env=make_env,
         device=device,

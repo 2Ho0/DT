@@ -11,7 +11,6 @@ import torch.optim.lr_scheduler as lr_scheduler
 
 from src.config import EnvironmentConfig, TransformerModelConfig
 from src.models.trajectory_transformer import (
-    CloneTransformer,
     DecisionTransformer,
 )
 from src.patch_transformer_lens.hooked_transformer_methods import (
@@ -27,7 +26,7 @@ def parse_args():
     )
     parser.add_argument("--exp_name", type=str, default="Dev")
     parser.add_argument("--d_model", type=int, default=128)
-    parser.add_argument("--trajectory_path", type=str)
+    parser.add_argument("--trajectory_path", nargs='+', type=str)
     parser.add_argument("--n_heads", type=int, default=4)
     parser.add_argument("--d_mlp", type=int, default=256)
     parser.add_argument("--activation_fn", type=str, default="relu")
@@ -42,6 +41,7 @@ def parse_args():
     parser.add_argument(
         "--scheduler", type=str, default="CosineAnnealingWarmup"
     )
+    parser.add_argument("--mode", type=str, default="rtg")
     parser.add_argument("--warm_up_steps", type=int, default=1000)
     parser.add_argument("--learning_rate", type=float, default=0.001)
     parser.add_argument("--lr_end", type=float, default=10e-8)
@@ -359,6 +359,7 @@ def get_optim_groups(model, offline_config):
     blacklist_weight_modules = (
         torch.nn.LayerNorm,
         torch.nn.Embedding,
+        torch.nn.BatchNorm1d,
     )  # not going to work trivially for HookedTransformer
     for mn, m in model.named_modules():
         for pn, p in m.named_parameters():

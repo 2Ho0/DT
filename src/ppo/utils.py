@@ -253,6 +253,14 @@ def store_model_checkpoint(
     checkpoint_name = f"{run_config.exp_name}_{checkpoint_num:0>2}"
     checkpoint_path = f"models/{checkpoint_name}.pt"
 
+    # 모델 정보 준비
+    if agent.model_config is None:
+        # RandomAgent 등 model_config가 None일 경우
+        model_config_json = json.dumps("random", cls=ConfigJsonEncoder)
+    else:
+        # 일반 에이전트의 경우 model_config 사용
+        model_config_json = json.dumps(agent.model_config, cls=ConfigJsonEncoder)
+
     torch.save(
         {
             "model_state_dict": agent.state_dict(),
@@ -260,9 +268,7 @@ def store_model_checkpoint(
             "environment_config": json.dumps(
                 agent.environment_config, cls=ConfigJsonEncoder
             ),
-            "model_config": json.dumps(
-                agent.model_config, cls=ConfigJsonEncoder
-            ),
+            "model_config": model_config_json,
         },
         checkpoint_path,
     )

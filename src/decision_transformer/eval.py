@@ -10,7 +10,7 @@ from copy import deepcopy
 
 import wandb
 from src.models.trajectory_transformer import (
-    CloneTransformer,
+
     DecisionTransformer,
     TrajectoryTransformer,
 )
@@ -90,10 +90,6 @@ def evaluate_dt_agent(
         _, action_preds, _ = model.forward(
             states=obs, actions=actions, rtgs=rtg, timesteps=timesteps
         )
-    elif isinstance(model, CloneTransformer):
-        _, action_preds = model.forward(
-            states=obs, actions=actions, timesteps=timesteps
-        )
     else:
         raise ValueError("Model type not supported")
 
@@ -133,10 +129,6 @@ def evaluate_dt_agent(
         if isinstance(model, DecisionTransformer):
             state_preds, action_preds, reward_preds = model.forward(
                 states=obs, actions=actions, rtgs=rtg, timesteps=timesteps
-            )
-        elif isinstance(model, CloneTransformer):
-            state_preds, action_preds = model.forward(
-                states=obs, actions=actions, timesteps=timesteps
             )
         else:
             raise NotImplementedError(

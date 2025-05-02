@@ -15,7 +15,7 @@ from src.config import (
 )
 from src.environments.environments import make_env
 from src.environments.registration import register_envs
-from src.ppo.train import train_ppo
+from src.ppo.train import train_random
 from src.ppo.utils import set_global_seeds
 from src.utils.trajectory_writer import TrajectoryWriter
 
@@ -89,11 +89,10 @@ def ppo_runner(
         ]
     )
 
-    agent = train_ppo(
+    agent = train_random(
         run_config=run_config,
         online_config=online_config,
         environment_config=environment_config,
-        model_config=model_config,
         envs=envs,
         trajectory_writer=trajectory_writer,
     )

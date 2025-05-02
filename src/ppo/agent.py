@@ -19,10 +19,7 @@ from src.config import (
 )
 from src.environments.environments import make_env
 from src.models.trajectory_lstm import TrajectoryLSTM
-from src.models.trajectory_transformer import (
-    ActorTransformer,
-    CriticTransfomer,
-)
+
 from src.utils.dictlist import DictList
 from src.utils.trajectory_writer import TrajectoryWriter
 
@@ -46,15 +43,7 @@ class PPOScheduler:
         end_lr: float,
         num_updates: int,
     ):
-        """
-        A learning rate scheduler for a Proximal Policy Optimization (PPO) algorithm.
-
-        Args:
-        - optimizer (optim.Optimizer): the optimizer to use for updating the learning rate.
-        - initial_lr (float): the initial learning rate.
-        - end_lr (float): the end learning rate.
-        - num_updates (int): the number of updates to perform before the learning rate reaches end_lr.
-        """
+  
         self.optimizer = optimizer
         self.initial_lr = initial_lr
         self.end_lr = end_lr
@@ -62,9 +51,7 @@ class PPOScheduler:
         self.n_step_calls = 0
 
     def step(self):
-        """
-        Implement linear learning rate decay so that after num_updates calls to step, the learning rate is end_lr.
-        """
+  
         self.n_step_calls += 1
         frac = self.n_step_calls / self.num_updates
         assert frac <= 1
@@ -90,16 +77,7 @@ class PPOAgent(nn.Module):
     def make_optimizer(
         self, num_updates: int, initial_lr: float, end_lr: float
     ) -> Tuple[optim.Optimizer, PPOScheduler]:
-        """Returns an Adam optimizer with a learning rate schedule for updating the agent's parameters.
 
-        Args:
-            num_updates (int): The total number of updates to be performed.
-            initial_lr (float): The initial learning rate.
-            end_lr (float): The final learning rate.
-
-        Returns:
-            Tuple[optim.Optimizer, PPOScheduler]: A tuple containing the optimizer and its attached scheduler.
-        """
         optimizer = optim.Adam(
             self.parameters(), lr=initial_lr, eps=1e-5, maximize=True
         )
@@ -120,18 +98,6 @@ class PPOAgent(nn.Module):
         std: float = np.sqrt(2),
         bias_const: float = 0.0,
     ) -> nn.Linear:
-        """Initializes the weights of a linear layer with orthogonal
-        initialization and the biases with a constant value.
-
-        Args:
-            layer (nn.Linear): The linear layer to be initialized.
-            std (float, optional): The standard deviation of the
-                distribution used to initialize the weights. Defaults to np.sqrt(2).
-            bias_const (float, optional): The constant value to initialize the biases with. Defaults to 0.0.
-
-        Returns:
-            nn.Linear: The initialized linear layer.
-        """
         t.nn.init.orthogonal_(layer.weight, std)
         t.nn.init.constant_(layer.bias, bias_const)
         return layer
@@ -149,14 +115,6 @@ class FCAgent(PPOAgent):
         device: t.device = t.device("cpu"),
         hidden_dim: int = 64,
     ):
-        """
-        An agent for a Proximal Policy Optimization (PPO) algorithm.
-
-        Args:
-        - envs (gym.vector.SyncVectorEnv): the environment(s) to interact with.
-        - device (t.device): the device on which to run the agent.
-        - hidden_dim (int): the number of neurons in the hidden layer.
-        """
         super().__init__(envs=envs, device=device)
 
         self.environment_config = environment_config
@@ -201,15 +159,6 @@ class FCAgent(PPOAgent):
         sampling_method="basic",
         **kwargs,
     ) -> None:
-        """Performs the rollout phase of the PPO algorithm, collecting experience by interacting with the environment.
-
-        Args:
-            memory (Memory): The replay buffer to store the experiences.
-            num_steps (int): The number of steps to collect.
-            envs (gym.vector.SyncVectorEnv): The vectorized environment to interact with.
-            trajectory_writer (TrajectoryWriter, optional): The writer to log the
-                collected trajectories. Defaults to None.
-        """
 
         device = memory.device
         cuda = device == "cuda"
@@ -272,16 +221,7 @@ class FCAgent(PPOAgent):
         scheduler: PPOScheduler,
         track: bool,
     ) -> None:
-        """Performs the learning phase of the PPO algorithm, updating the agent's parameters
-        using the collected experience.
-
-        Args:
-            memory (Memory): The replay buffer containing the collected experiences.
-            args (OnlineTrainConfig): The configuration for the training.
-            optimizer (optim.Optimizer): The optimizer to update the agent's parameters.
-            scheduler (PPOScheduler): The scheduler attached to the optimizer.
-            track (bool): Whether to track the training progress.
-        """
+   
         for _ in range(args.update_epochs):
             minibatches = memory.get_minibatches()
             # Compute loss on each minibatch, and step the optimizer
@@ -343,21 +283,7 @@ class TransformerPPOAgent(PPOAgent):
         transformer_model_config: TransformerModelConfig,
         device: t.device = t.device("cpu"),
     ):
-        """
-        An agent for a Proximal Policy Optimization (PPO) algorithm. This agent uses two different transformers
-        for the critic and agent networks.
-
-        It is not currently clear that this agent is working and is not currently used in the project.
-        If you are interested in debugging/improving on it feel free to do so. It is possible transformers
-        also just suck at online learning as is reported by at least one paper.
-
-        Args:
-        - envs (gym.vector.SyncVectorEnv): the environment(s) to interact with.
-        - device (t.device): the device on which to run the agent.
-        - environment_config (EnvironmentConfig): the configuration for the environment.
-        - model_config (TransformerModelConfig): the configuration for the transformer model.
-        - device (t.device): the device on which to run the agent.
-        """
+  
         super().__init__(envs=envs, device=device)
         self.environment_config = environment_config
         self.model_config = transformer_model_config
@@ -365,15 +291,9 @@ class TransformerPPOAgent(PPOAgent):
         self.num_obs = np.array(self.obs_shape).prod()
         self.num_actions = envs.single_action_space.n
         self.hidden_dim = self.model_config.d_model
-        self.critic = CriticTransfomer(
-            transformer_config=self.model_config,
-            environment_config=environment_config,
-        )
+
         self.layer_init(self.critic.value_predictor, std=0.01)
-        self.actor = ActorTransformer(
-            transformer_config=self.model_config,
-            environment_config=environment_config,
-        )
+
         self.layer_init(self.actor.action_predictor, std=0.01)
         self.device = device
         self = self.to(device)
@@ -387,15 +307,7 @@ class TransformerPPOAgent(PPOAgent):
         sampling_method="basic",
         **kwargs,
     ) -> None:
-        """Performs the rollout phase of the PPO algorithm, collecting experience by interacting with the environment.
-
-        Args:
-            memory (Memory): The replay buffer to store the experiences.
-            num_steps (int): The number of steps to collect.
-            envs (gym.vector.SyncVectorEnv): The vectorized environment to interact with.
-            trajectory_writer (TrajectoryWriter, optional): The writer to
-                log the collected trajectories. Defaults to None.
-        """
+ 
 
         device = memory.device
         obs = memory.next_obs
@@ -543,16 +455,7 @@ class TransformerPPOAgent(PPOAgent):
         scheduler: PPOScheduler,
         track: bool,
     ) -> None:
-        """Performs the learning phase of the PPO algorithm, updating the agent's parameters
-        using the collected experience.
 
-        Args:
-            memory (Memory): The replay buffer containing the collected experiences.
-            args (OnlineTrainConfig): The configuration for the training.
-            optimizer (optim.Optimizer): The optimizer to update the agent's parameters.
-            scheduler (PPOScheduler): The scheduler attached to the optimizer.
-            track (bool): Whether to track the training progress.
-        """
 
         for _ in range(args.update_epochs):
             n_timesteps = (self.actor.transformer_config.n_ctx - 1) // 2 + 1
@@ -631,19 +534,7 @@ class LSTMPPOAgent(PPOAgent):
         lstm_config: LSTMModelConfig,
         device: t.device,
     ):
-        """
-        An agent for a Proximal Policy Optimization (PPO) algorithm. This agent uses a single LSTM Model
-        class derived from the BabyAI codebase.
-
-        This class is currently in deverlopment.
-
-        Args:
-        - envs (gym.vector.SyncVectorEnv): the environment(s) to interact with.
-        - device (t.device): the device on which to run the agent.
-        - environment_config (EnvironmentConfig): the configuration for the environment.
-        - lstm_config (LSTMModelConfig): the configuration for the LSTM model.
-        - device (t.device): the device on which to run the agent.
-        """
+ 
         super().__init__(envs=envs, device=device)
         self.environment_config = environment_config
         self.model_config = lstm_config
@@ -864,25 +755,101 @@ class LSTMPPOAgent(PPOAgent):
 
         return obs
 
+class RandomAgent(PPOAgent):
+    def __init__(
+        self,
+        envs: gym.vector.SyncVectorEnv,
+        environment_config: EnvironmentConfig,
+        device: t.device = t.device("cpu"),
+    ):
+        """
+        PPOAgent를 상속하지만, 내부적으로는 아무 학습도 하지 않고
+        무작위 행동만 수행하는 Random Agent.
+        """
+        super().__init__(envs=envs, device=device)
+        self.environment_config = environment_config
+        self.device = device
+        self.model_config = None
+        
+        # RandomAgent는 네트워크를 쓰지 않으므로, 그냥 None 혹은 빈 Sequential
+        # self.critic, self.actor는 부모 클래스에서 선언만 되어 있음
+        # 필요없으니 그대로 둡니다.
+    
+    def rollout(
+        self,
+        memory: Memory,
+        num_steps: int,
+        envs: gym.vector.SyncVectorEnv,
+        trajectory_writer=None,
+        **kwargs,
+    ) -> None:
+        """
+        무작위 행동으로 rollout 데이터를 수집.
+        """
+        device = memory.device
+        obs = memory.next_obs
+        done = memory.next_done
+        
+        for _ in range(num_steps):
+            # 무작위로 action 샘플링
+            # (envs.single_action_space.n이므로 Discrete일 때)
+            batch_size = obs.shape[0]
+            random_actions = np.array([
+                envs.single_action_space.sample() for _ in range(batch_size)
+            ])
+            action = t.from_numpy(random_actions).to(device)
+            
+            # logprob, value 등은 PPO에선 필수지만 
+            # RandomAgent에서는 딱히 의미가 없으므로 아래처럼 처리
+            logprob = t.zeros_like(action, dtype=t.float32)
+            value = t.zeros_like(action, dtype=t.float32)
+            
+            next_obs, reward, next_done, next_truncated, info = envs.step(action.cpu().numpy())
+            next_obs = memory.obs_preprocessor(next_obs)
+            reward = t.from_numpy(reward).to(device)
+            
+            # TrajectoryWriter 있으면 기록
+            if trajectory_writer is not None:
+                trajectory_writer.accumulate_trajectory(
+                    next_obs=obs.detach().cpu().numpy(),
+                    reward=reward.detach().cpu().numpy(),
+                    action=action.detach().cpu().numpy(),
+                    done=next_done,
+                    truncated=next_truncated,
+                    info=info,
+                )
+            
+            # memory에 저장
+            memory.add(info, obs, done, action, logprob, value, reward)
+            
+            obs = t.from_numpy(next_obs).to(device)
+            done = t.from_numpy(next_done).to(device, dtype=t.float)
+        
+        # 마지막 상태값(이론적으론 0이어도 무방)
+        memory.next_obs = obs
+        memory.next_done = done
+        memory.next_value = t.zeros(obs.shape[0], device=device)
+    
+    def learn(self, memory: Memory, args: OnlineTrainConfig, optimizer, scheduler, track: bool) -> None:
+        """
+        Random Agent는 학습할 게 전혀 없으므로 no-op.
+        """
+        pass
 
 def get_agent(
-    model_config: dataclass,
+    model_config: str,
     envs: gym.vector.SyncVectorEnv,
     environment_config: EnvironmentConfig,
     online_config,
 ) -> PPOAgent:
-    """
-    Returns an agent based on the given configuration.
-
-    Args:
-    - transformer_model_config: The configuration for the transformer model.
-    - envs: The environment to train on.
-    - environment_config: The configuration for the environment.
-    - online_config: The configuration for online training.
-
-    Returns:
-    - An agent.
-    """
+    
+    if model_config == "random":
+        agent = RandomAgent(
+            envs=envs,
+            environment_config=environment_config,
+            device=environment_config.device,
+        )
+        return agent
     if model_config is not None:
         if isinstance(model_config, TransformerModelConfig):
             agent = TransformerPPOAgent(
@@ -974,19 +941,7 @@ def load_saved_checkpoint(path, num_envs=10) -> PPOAgent:
 
 
 def load_all_agents_from_checkpoints(checkpoint_folder_path, num_envs=10):
-    """
-        Example:
-    --------
-    .. code-block:: python
-        >>>  import wandb
-        >>>  run = wandb.init()
-        >>>  artifact = run.use_artifact('arena-ldn/PPO-MiniGrid/Test-PPO-LSTM_checkpoints:v16', type='model')
-        >>>  artifact_dir = artifact.download()
 
-        >>>  checkpoint_folder_path = "artifacts/Test-PPO-LSTM_checkpoints:v16"
-        >>>  agents = load_all_agents_from_checkpoints(checkpoint_folder_path)
-
-    """
     # Get all files in the checkpoint folder
     checkpoint_files = os.listdir(checkpoint_folder_path)
 

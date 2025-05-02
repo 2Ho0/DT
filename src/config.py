@@ -7,7 +7,7 @@ import json
 import os
 import uuid
 from typing import Optional
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 import gymnasium as gym
 import torch
@@ -81,6 +81,7 @@ class TransformerModelConfig:
     time_embedding_type: str = "embedding"
     seed: int = 1
     device: str = "cpu"
+    mode: str = "rtg"
 
     def __post_init__(self):
         assert self.d_model % self.n_heads == 0
@@ -173,7 +174,7 @@ class OfflineTrainConfig:
     Configuration class for offline training.
     """
 
-    trajectory_path: str
+    trajectory_path: list[str] = field(default_factory=list)
     batch_size: int = 128
     convert_to_one_hot: bool = False
     optimizer: str = "AdamW"
@@ -196,6 +197,9 @@ class OfflineTrainConfig:
     model_type: str = "decision_transformer"
     track: bool = False
     device: str = "cpu"
+    mlp_train_epochs: int = 5
+    task_loss_weight: float = 0.1     # ✅ task classification loss 가중치
+    mode: str = "rtg"
 
     def __post_init__(self):
         assert self.model_type in ["decision_transformer", "clone_transformer"]
