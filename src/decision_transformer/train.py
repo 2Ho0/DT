@@ -30,7 +30,20 @@ def train(
     device="cpu",
     
 ):
+    
+    import torch.nn as nn
+    from sklearn.utils.class_weight import compute_class_weight
+    import numpy as np
+
+    # 전체 학습 데이터의 task_label 수집 필요
+    task_labels_list = [0] * 270 + [1] * 360 + [2] * 280  # 예시 (실제값 대체)
+
+    class_weights = compute_class_weight(class_weight='balanced', classes=np.array([0,1,2]), y=task_labels_list)
+    print("Class Weights:", class_weights)
+
+    weight_tensor = t.tensor(class_weights, dtype=t.float32).to(device)
     loss_fn = nn.CrossEntropyLoss()
+
     model = model.to(device)
     mode = offline_config.mode
     
@@ -76,7 +89,7 @@ def train(
     # wandb.watch(model, log="all", log_freq=train_batches_per_epoch)
     pbar = tqdm(range(offline_config.train_epochs))
     for epoch in pbar:
-        for batch, (s, a, r, d, rtg, ti, m, task_id) in enumerate(train_dataloader):
+        for batch, (s, a, r, d, rtg, ti, m, _) in enumerate(train_dataloader):
             total_batches = epoch * train_batches_per_epoch + batch
 
             model.train()
@@ -146,7 +159,7 @@ def train(
                 learning_rate = optimizer.param_groups[0]["lr"]
                 wandb.log({
                     "train/loss": loss.item(),
-                }, step=total_batches)
+                })
 
                 wandb.log(
                     {"metrics/tokens_seen": tokens_seen}, step=total_batches
@@ -234,7 +247,9 @@ def train(
 
             # task classification loss만 사용
             task_labels = task_id.to(task_preds.device)
-            task_loss = model.label_smoothing_loss(task_preds, task_labels)
+            print('task_labels: ', task_labels, ", task_preds:", task_preds)
+            task_loss = model.label_smoothing_loss(task_preds, task_labels, class_weights=weight_tensor)
+
             task_pred = t.argmax(task_preds, dim=-1)
             n_correct = (task_pred == task_labels).sum().item()
             n_total = task_labels.shape[0]
@@ -244,14 +259,18 @@ def train(
                 wandb.log({
                     "train/MLP_loss": task_loss.item(),
                     "train/MLP_accuracy": task_accuracy,
-                }, step=total_batches)
+                })
 
-            
+            # 🔍 여기서 gradient 확인
+            for name, param in model.named_parameters():
+                if param.requires_grad and param.grad is not None:
+                    print(f"{name}: grad mean = {param.grad.abs().mean().item():.6f}")
+
             optimizer.zero_grad()
             task_loss.backward()
             optimizer.step()
             scheduler.step()
-            current_mlp_step = epoch * len(train_dataloader) + batch
+            
             pbar_mlp.set_description(f"MLP Fine-Tuning: task_loss = {task_loss.item():.4f}")
             
 
@@ -262,7 +281,9 @@ def train(
         epochs=offline_config.test_epochs,
         track=offline_config.track,
         batch_number=batch_number,
-        mode = mode
+        mode = mode,
+        class_weights=weight_tensor,
+        device=device
     )
     return model
 
@@ -276,11 +297,11 @@ def test(
     track=False,
     batch_number=0,
     mode="rtg",
+    class_weights=None,
+    device="cpu",
 ):
+
     model.eval()
-    for name, param in model.named_parameters():
-        param.requires_grad = False
-        print(f"❌ {name} is frozen (no gradient).")
 
     loss_fn = nn.CrossEntropyLoss()
 
@@ -308,14 +329,14 @@ def test(
 
             a[a == -10] = env.action_space.n
             action = a[:, :-1].unsqueeze(-1) if a.shape[1] > 1 else None
-
-            state_preds, action_preds, reward_preds, task_preds = model(
-                states=s,
-                actions=action,
-                rtgs=rtg,
-                timesteps=ti.unsqueeze(-1),
-                mlp_learn=True,
-            )
+            with t.no_grad():
+                state_preds, action_preds, reward_preds, task_preds = model(
+                    states=s,
+                    actions=action,
+                    rtgs=rtg,
+                    timesteps=ti.unsqueeze(-1),
+                    mlp_learn=True,
+                )
 
             if mode == "state":
                 state_preds = state_preds[:, :-1]
@@ -351,8 +372,11 @@ def test(
             if task_id is not None:
                 has_task_labels = True
                 task_id = task_id.to(task_preds.device)
-                task_loss += model.label_smoothing_loss(task_preds, task_id).item()
+                task_loss += model.label_smoothing_loss(task_preds, task_id, class_weights=class_weights).item()
+
+                print('task_preds: ', task_preds)
                 task_pred = t.argmax(task_preds, dim=-1)
+                print(f"task_pred: {task_pred}, task_id: {task_id}")
                 n_task_correct += (task_pred == task_id).sum().item()
                 n_task_total += task_id.shape[0]
 
@@ -368,7 +392,7 @@ def test(
                         task_total[true] = 0
                     task_correct[true] += int(pred == true)
                     task_total[true] += 1
-
+                    
     mean_main_loss = main_loss / (epochs * test_batches_per_epoch)
     main_accuracy = main_correct / main_total if mode == "action" else None
 

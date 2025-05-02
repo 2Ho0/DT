@@ -298,7 +298,7 @@ class TrajectoryTransformer(nn.Module):
 
 
 class DecisionTransformer(TrajectoryTransformer):
-    def __init__(self, environment_config, transformer_config, num_tasks: int, penalty_dim: int = 128, smoothing: float = 0.1,**kwargs):
+    def __init__(self, environment_config, transformer_config, num_tasks: int, penalty_dim: int = 256, smoothing: float = 0.1,**kwargs):
         super().__init__(
             environment_config=environment_config,
             transformer_config=transformer_config,
@@ -312,31 +312,47 @@ class DecisionTransformer(TrajectoryTransformer):
         )
         self.reward_predictor = nn.Linear(self.transformer_config.d_model, 1)
         self.penultimate_layer = nn.Sequential(
+            nn.LayerNorm(self.transformer_config.d_model),
             nn.Linear(self.transformer_config.d_model, penalty_dim),
-            nn.BatchNorm1d(penalty_dim),  # 배치 정규화 추가
             nn.ReLU(),
-            nn.Dropout(0.3),  # 드롭아웃 추가
+            nn.Linear(penalty_dim, penalty_dim),
+            nn.ReLU(),
+            nn.LayerNorm(penalty_dim),
             nn.Linear(penalty_dim, penalty_dim // 2),
+            nn.ReLU(),
+            nn.LayerNorm(penalty_dim // 2),
+            nn.Dropout(0.3)
         )
-        self.output_layer = nn.Linear(penalty_dim // 2, num_tasks)
+
+        self.output_layer = nn.Sequential(
+            nn.Linear(penalty_dim // 2, num_tasks)
+        )
         # n_ctx include full timesteps except for the last where it doesn't know the action
         assert (transformer_config.n_ctx - 2) % 3 == 0
 
         self.initialize_weights()
 
-    def label_smoothing_loss(self, preds, targets):
-        """
-        Custom label smoothing loss function
-        preds: logits (B, num_tasks)
-        targets: int labels (B,)
-        """
+    def label_smoothing_loss(self, preds, targets, class_weights=None):
         confidence = 1.0 - self.smoothing
         num_classes = preds.size(1)
+
         with torch.no_grad():
-            true_dist = torch.zeros_like(preds)
-            true_dist.fill_(self.smoothing / (num_classes - 1))
+            true_dist = torch.full_like(preds, self.smoothing / (num_classes - 1))
             true_dist.scatter_(1, targets.unsqueeze(1), confidence)
-        return torch.mean(torch.sum(-true_dist * F.log_softmax(preds, dim=1), dim=1))
+
+        log_probs = F.log_softmax(preds, dim=1)
+        print("class_weights: ", class_weights.cpu().numpy())
+
+
+        if class_weights is not None:
+            weight_matrix = class_weights.unsqueeze(0)  # (1, C)
+            loss = -true_dist * log_probs * weight_matrix  # (B, C)
+        else:
+            loss = -true_dist * log_probs
+
+        return loss.sum(dim=1).mean()
+
+
 
     def predict_rewards(self, x):
         return self.reward_predictor(x)
@@ -393,18 +409,18 @@ class DecisionTransformer(TrajectoryTransformer):
         if targets:
             targets = targets + time_embeddings
         
-        if mlp_learn:
-            if mode == "action":
-                pooled = action_embeddings.max(dim=1)[0]  # 반환된 튜플에서 첫 번째 값(최대값)만 선택
-                print(f"Using ACTION embeddings for task classification (mode: {mode})")
-            elif mode == "rtg":
-                pooled = reward_embeddings.mean(dim=1)
-                print(f"Using RTG (reward) embeddings for task classification (mode: {mode})")
-            elif mode == "state":  # state 또는 기본
-                pooled = state_embeddings.mean(dim=1)       # -> (B, d_model)
-                print(f"Using STATE embeddings for task classification (mode: {mode})")
-            penultimate_out = self.penultimate_layer(pooled)  # -> (B, penalty_dim//2)
-            task_preds = self.output_layer(penultimate_out)  # -> (B, num_tasks)
+        # if mlp_learn:
+        #     if mode == "action":
+        #         pooled = action_embeddings.max(dim=1)[0]  # 반환된 튜플에서 첫 번째 값(최대값)만 선택
+        #         print(f"Using ACTION embeddings for task classification (mode: {mode})")
+        #     elif mode == "rtg":
+        #         pooled = reward_embeddings.mean(dim=1)
+        #         print(f"Using RTG (reward) embeddings for task classification (mode: {mode})")
+        #     elif mode == "state":  # state 또는 기본
+        #         pooled = state_embeddings.mean(dim=1)       # -> (B, d_model)
+        #         print(f"Using STATE embeddings for task classification (mode: {mode})")
+            # penultimate_out = self.penultimate_layer(pooled)  # -> (B, penalty_dim//2)
+            # task_preds = self.output_layer(penultimate_out)  # -> (B, num_tasks)
             
         # create the token embeddings
         token_embeddings = torch.zeros(
@@ -425,10 +441,8 @@ class DecisionTransformer(TrajectoryTransformer):
             target_embedding = self.reward_embedding(targets)
             token_embeddings[:, 0, :] = target_embedding[:, 0, :]
 
-        if mlp_learn:
-            return token_embeddings, task_preds
-        else:
-            return token_embeddings
+        
+        return token_embeddings
 
     def to_tokens(self, states, actions, rtgs, timesteps, mlp_learn):
         # embed states and recast back to (batch, block_size, n_embd)
@@ -445,25 +459,15 @@ class DecisionTransformer(TrajectoryTransformer):
             timesteps
         )  # batch_size, block_size, n_embd
 
-        if mlp_learn:
-            # use state_embeddings, actions, rewards to go and
-            token_embeddings, task_preds = self.get_token_embeddings(
-                state_embeddings=state_embeddings,
-                action_embeddings=action_embeddings,
-                reward_embeddings=reward_embeddings,
-                time_embeddings=time_embeddings,
-                mlp_learn=mlp_learn,
-            )
-            return token_embeddings, task_preds
-        else:
-            token_embeddings = self.get_token_embeddings(
-                state_embeddings=state_embeddings,
-                action_embeddings=action_embeddings,
-                reward_embeddings=reward_embeddings,
-                time_embeddings=time_embeddings,
-                mlp_learn=mlp_learn,
-            )
-            return token_embeddings
+    
+        token_embeddings = self.get_token_embeddings(
+            state_embeddings=state_embeddings,
+            action_embeddings=action_embeddings,
+            reward_embeddings=reward_embeddings,
+            time_embeddings=time_embeddings,
+            mlp_learn=mlp_learn,
+        )
+        return token_embeddings
 
     def get_action(self, states, actions, rewards, timesteps):
         state_preds, action_preds, reward_preds = self.forward(
@@ -550,21 +554,40 @@ class DecisionTransformer(TrajectoryTransformer):
 
         # embed states and recast back to (batch, block_size, n_embd)
         
+            
+        token_embeddings = self.to_tokens(states, actions, rtgs, timesteps, mlp_learn)
+        x = self.transformer(token_embeddings)
+
+        state_preds, action_preds, reward_preds = self.get_logits(
+            x, batch_size, seq_length, no_actions=no_actions
+        )
 
         if mlp_learn:
-            token_embeddings, task_preds = self.to_tokens(states, actions, rtgs, timesteps, mlp_learn)
-            x = self.transformer(token_embeddings)
-
-            state_preds, action_preds, reward_preds = self.get_logits(
-                    x, batch_size, seq_length, no_actions=no_actions
-                )
+            # ✅ 항상 transformer 출력 사용 (통합적 표현)
+            # pooled = x[:, 0]  # or x.mean(dim=1)
+            pooled = x.mean(dim=1)
+            penultimate_out = self.penultimate_layer(pooled)
+            task_preds = self.output_layer(penultimate_out)
             return state_preds, action_preds, reward_preds, task_preds
         else:
-            token_embeddings = self.to_tokens(states, actions, rtgs, timesteps,mlp_learn)
-            x = self.transformer(token_embeddings)
-
-            state_preds, action_preds, reward_preds = self.get_logits(
-                    x, batch_size, seq_length, no_actions=no_actions
-                )
             return state_preds, action_preds, reward_preds
-        
+
+
+            # if mode == "state":
+            #     state_embeddings = self.get_state_embedding(states)
+            #     pooled = state_embeddings.mean(dim=1)
+            #     print(f"Using STATE embeddings for task classification (mode: {mode})")
+            # elif mode == "rtg":
+            #     reward_embeddings = self.get_reward_embedding(rtgs)
+            #     pooled = reward_embeddings.mean(dim=1)
+            #     print(f"Using RTG (reward) embeddings for task classification (mode: {mode})")
+            # elif mode == "action":
+            #     action_embeddings = self.get_actioin_embedding(actions)
+            #     pooled = action_embeddings.max(dim=1)[0]
+            #     print(f"Using action embeddings for task classification (mode: {mode})")
+            # else:
+            #     raise ValueError(f"Unsupported mode for MLP task classification: {mode}")
+
+            # penultimate_out = self.penultimate_layer(pooled)
+            # task_preds = self.output_layer(penultimate_out)
+            # return state_preds, action_preds, reward_preds, task_preds
