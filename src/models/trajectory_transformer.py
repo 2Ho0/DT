@@ -321,7 +321,8 @@ class DecisionTransformer(TrajectoryTransformer):
             nn.Linear(penalty_dim, penalty_dim // 2),
             nn.ReLU(),
             nn.LayerNorm(penalty_dim // 2),
-            nn.Dropout(0.3)
+            nn.Dropout(0.3),
+           
         )
 
         self.output_layer = nn.Sequential(
@@ -351,8 +352,6 @@ class DecisionTransformer(TrajectoryTransformer):
             loss = -true_dist * log_probs
 
         return loss.sum(dim=1).mean()
-
-
 
     def predict_rewards(self, x):
         return self.reward_predictor(x)
@@ -564,7 +563,6 @@ class DecisionTransformer(TrajectoryTransformer):
 
         if mlp_learn:
             # ✅ 항상 transformer 출력 사용 (통합적 표현)
-            # pooled = x[:, 0]  # or x.mean(dim=1)
             pooled = x.mean(dim=1)
             penultimate_out = self.penultimate_layer(pooled)
             task_preds = self.output_layer(penultimate_out)

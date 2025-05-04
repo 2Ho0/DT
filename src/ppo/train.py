@@ -111,16 +111,16 @@ def train_ppo(
     # 학습된 에이전트 반환
     return agent
 
-def count_successful_episodes(trajectory_writer):
-    count = 0
-    for reward_seq, done_seq, truncated_seq in zip(
-        trajectory_writer.rewards, trajectory_writer.dones, trajectory_writer.truncated
-    ):
-        # 성공 조건: reward 합 > 0이고, 종료되었거나 잘렸을 경우
-        # if np.sum(reward_seq) > 0.0 and (done_seq[-1] or truncated_seq[-1]):
-        if np.sum(reward_seq) > 0.0:
-            count += 1
-    return count
+# def count_successful_episodes(trajectory_writer):
+#     count = 0
+#     for reward_seq, done_seq, truncated_seq in zip(
+#         trajectory_writer.rewards, trajectory_writer.dones, trajectory_writer.truncated
+#     ):
+#         # 성공 조건: reward 합 > 0이고, 종료되었거나 잘렸을 경우
+#         # if np.sum(reward_seq) > 0.0 and (done_seq[-1] or truncated_seq[-1]):
+#         if np.sum(reward_seq) > 0.0:
+#             count += 1
+#     return count
 
 def train_random(
     run_config,
@@ -144,8 +144,8 @@ def train_random(
         checkpoint_artifact = wandb.Artifact(f"{run_config.exp_name}_checkpoints", type="model")
         checkpoint_interval = max(1, num_updates // online_config.num_checkpoints)
 
-    success_count = 0
-    target_count = 200
+    # success_count = 0
+    # target_count = 500
     progress_bar = tqdm(range(num_updates), position=0, leave=True)
     for n in progress_bar:
 
@@ -168,22 +168,24 @@ def train_random(
             trajectory_writer.add_metadata({"task_id": task_id})
             trajectory_writer.tag_terminated_trajectories()
             
-            successful_episodes = count_successful_episodes(trajectory_writer)  # ✅ 함수 구현 필요
-            success_count += successful_episodes
+            # successful_episodes = count_successful_episodes(trajectory_writer)  # ✅ 함수 구현 필요
+            # success_count += successful_episodes
         
-            print(f"[INFO] Step {n}: {successful_episodes} new episodes added, total = {success_count}")
-            if run_config.track:
-                wandb.log({"offline/successful_trajectories": success_count}, step=n)
+            # print(f"[INFO] Step {n}: {successful_episodes} new episodes added, total = {success_count}")
+            # if run_config.track:
+            #     wandb.log({"offline/successful_trajectories": success_count}, step=n)
         
-            if success_count >= target_count:
-                print(f"[INFO] Reached {success_count} successful episodes. Writing to file and stopping.")
-                trajectory_writer.write()
-                break
+            # if success_count >= target_count:
+            #     print(f"[INFO] Reached {success_count} successful episodes. Writing to file and stopping.")
+            #     trajectory_writer.write()
+            #     break
             
-            
-            if successful_episodes > 0:
-                trajectory_writer.write(upload_to_wandb=run_config.track)
-                trajectory_writer.reset()
+            trajectory_writer.write(upload_to_wandb=run_config.track)
+            trajectory_writer.reset()
+
+            # if successful_episodes > 0:
+            #     trajectory_writer.write(upload_to_wandb=run_config.track)
+            #     trajectory_writer.reset()
 
         agent.learn(memory, online_config, optimizer=None, scheduler=None, track=run_config.track)
 

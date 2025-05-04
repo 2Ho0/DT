@@ -36,7 +36,7 @@ def train(
     import numpy as np
 
     # 전체 학습 데이터의 task_label 수집 필요
-    task_labels_list = [0] * 270 + [1] * 360 + [2] * 280  # 예시 (실제값 대체)
+    task_labels_list = [0] * 400 + [1] * 500 + [2] * 400  # 예시 (실제값 대체)
 
     class_weights = compute_class_weight(class_weight='balanced', classes=np.array([0,1,2]), y=task_labels_list)
     print("Class Weights:", class_weights)
