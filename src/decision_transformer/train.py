@@ -36,8 +36,8 @@ def train(
     import numpy as np
 
     # 전체 학습 데이터의 task_label 수집 필요
-    task_labels_list = [0] * 400 + [1] * 500 + [2] * 400  # 예시 (실제값 대체)
-
+    # modify task weight
+    task_labels_list = [0] * 400 + [1] * 500 + [2] * 400
     class_weights = compute_class_weight(class_weight='balanced', classes=np.array([0,1,2]), y=task_labels_list)
     print("Class Weights:", class_weights)
 
@@ -46,7 +46,8 @@ def train(
 
     model = model.to(device)
     mode = offline_config.mode
-    
+
+    # Check gradient
     for name, param in model.named_parameters():
         if param.requires_grad:
             print(f"✅ Will update: {name}")
@@ -113,8 +114,8 @@ def train(
             )
 
             if mode == 'state':
-                state_preds = state_preds[:, :-1]
-                state_preds = rearrange(state_preds, "b t s -> (b t) s") # 128, 4, 5, 5, 20
+                state_preds = state_preds[:, :-1] # choose all of first index and choose index from start to before end
+                state_preds = rearrange(state_preds, "b t s -> (b t) s") # 128, 4, 7, 7, 20
                 print('s.shape:', s.shape)
                 print('state_preds.shape:', state_preds.shape)
                 s_exp = rearrange(s[:, 1:], "b t h w c -> (b t) (h w c)").to(t.float32)
@@ -132,24 +133,25 @@ def train(
             elif mode == 'rtg':
                 reward_preds = reward_preds[:, :-1]
                 r = r[:, 1:]
-                print('r.shape:', r.shape)
-                reward_preds = rearrange(reward_preds, "b t s -> (b t) s") # 128, 4, 1
-                print('reward_preds.shape:', reward_preds.shape)
+                print('r.shape:', r.shape) # 128, 100, 1
+                reward_preds = rearrange(reward_preds, "b t s -> (b t) s")
+                print('reward_preds.shape:', reward_preds.shape) # 12800, 1
                 r_exp = rearrange(r.squeeze(-1), "b t -> (b t)").to(t.float32)
                 loss = nn.MSELoss()(reward_preds.squeeze(-1), r_exp)
             
-            print("s[1:].shape (GT):", s[:, 1:].shape)
-            print("state_preds.shape (pred):", state_preds.shape)
+            print("s[1:].shape (GT):", s[:, 1:].shape) # 128, 100, 7, 7, 20
+            print("state_preds.shape (pred):", state_preds.shape) # 128, 101, 980
 
-            print("r[1:].shape (GT):", r[:, 1:].shape)
-            print("reward_preds.shape (pred):", reward_preds.shape)
+            print("r[1:].shape (GT):", r[:, 1:].shape) # 128, 99, 1
+            print("reward_preds.shape (pred):", reward_preds.shape) # 12800, 1
            
             loss.backward()
             optimizer.step()
             scheduler.step()
 
             pbar.set_description(f"Training DT: {loss.item():.4f}")
-            
+
+            #
             if offline_config.track:
                 tokens_seen = (
                     (total_batches + 1)
@@ -169,10 +171,8 @@ def train(
                     step=total_batches,
                 )
 
-
         batch_number = epoch * train_batches_per_epoch
         # at test frequency
-       
             
         representative_dataset = list(trajectory_data_set.values())[0]
         eval_env_config = EnvironmentConfig(
@@ -209,6 +209,8 @@ def train(
                     device=device,
                     num_envs=offline_config.eval_num_envs,
                 )
+
+    # MLP training start!!
     # Step 2: Freeze all except MLP layers (penultimate_layer, output_layer)
     print("\n🔒 Freezing all layers except MLP (penultimate_layer, output_layer)")
     for name, param in model.named_parameters():
@@ -218,6 +220,7 @@ def train(
         else:
             param.requires_grad = False
             print(f"❌ {name} is frozen.")
+
     # 새로운 옵티마이저와 스케줄러 설정
     optimizer = configure_optimizers(model, offline_config)
     scheduler = get_scheduler(
@@ -261,7 +264,7 @@ def train(
                     "train/MLP_accuracy": task_accuracy,
                 })
 
-            # 🔍 여기서 gradient 확인
+            # 🔍 여기서 gradient 확인 penultimate_0,1,3,5,6,8, output_0
             for name, param in model.named_parameters():
                 if param.requires_grad and param.grad is not None:
                     print(f"{name}: grad mean = {param.grad.abs().mean().item():.6f}")

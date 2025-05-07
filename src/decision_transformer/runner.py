@@ -65,15 +65,12 @@ def run_decision_transformer(
         dataset.task_id = i  # 🟢 각 task에 고유 id 부여
         task_datasets[f"task_{i}"] = dataset
 
-    
-
     # ensure all the environments we need are registered
     register_envs()
 
     # 🟢 대표 task 하나 선택 (예: task_0)
     first_task_key = list(task_datasets.keys())[0]
     first_dataset = task_datasets[first_task_key]
-
     # 환경 ID 및 설정
     env_id = first_dataset.metadata["args"]["env_id"]
     print(first_dataset.metadata)
