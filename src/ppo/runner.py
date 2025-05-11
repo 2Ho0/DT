@@ -18,6 +18,7 @@ from src.environments.registration import register_envs
 from src.ppo.train import train_random
 from src.ppo.utils import set_global_seeds
 from src.utils.trajectory_writer import TrajectoryWriter
+from gymnasium.vector import AsyncVectorEnv
 
 warnings.filterwarnings("ignore", category=DeprecationWarning)
 
@@ -88,6 +89,19 @@ def ppo_runner(
             for i in range(online_config.num_envs)
         ]
     )
+    # envs = AsyncVectorEnv(
+    #     [
+    #         make_env(
+    #             config=environment_config,
+    #             seed=environment_config.seed + i,
+    #             idx=i,
+    #             run_name=run_name,
+    #         )
+    #         for i in range(online_config.num_envs)
+    #     ],
+    #     shared_memory=False
+    # )
+
 
     agent = train_random(
         run_config=run_config,

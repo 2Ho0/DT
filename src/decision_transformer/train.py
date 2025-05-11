@@ -258,11 +258,25 @@ def train(
             n_total = task_labels.shape[0]
             task_accuracy = n_correct / n_total
 
+            # task accuracy
+            task_correct = {}
+            task_total = {}
+            for pred, true in zip(task_pred.cpu(), task_labels.cpu()):
+                true = int(true)
+                if true not in task_correct:
+                    task_correct[true] = 0
+                    task_total[true] = 0
+                task_correct[true] += int(pred == true)
+                task_total[true] += 1
+
             if offline_config.track:
                 wandb.log({
                     "train/MLP_loss": task_loss.item(),
                     "train/MLP_accuracy": task_accuracy,
                 })
+                for tid in sorted(task_correct.keys()):
+                    acc = task_correct[tid] / task_total[tid]
+                    wandb.log({f"train/MLP_task{tid}_accuracy": acc})
 
             # 🔍 여기서 gradient 확인 penultimate_0,1,3,5,6,8, output_0
             for name, param in model.named_parameters():

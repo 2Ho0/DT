@@ -24,18 +24,18 @@ def parse_args():
         description="Train a decision transformer on a trajectory dataset.",
         epilog="The last enemy that shall be defeated is death.",
     )
-    parser.add_argument("--exp_name", type=str, default="Dev")
-    parser.add_argument("--d_model", type=int, default=128)
-    parser.add_argument("--trajectory_path", nargs='+', type=str)
+    parser.add_argument("--exp_name", type=str, default="MiniGrid-Dynamic-Obstacles-8x8-v0-Refactor")
+    parser.add_argument("--d_model", type=int, default=256)
+    parser.add_argument("--trajectory_path", nargs='+', default=['../trajectories/DoorKey2.gz','../trajectories/LavaCrossing2.gz','../trajectories/SimpleCrossing2.gz'], type=str)
     parser.add_argument("--n_heads", type=int, default=4)
     parser.add_argument("--d_mlp", type=int, default=256)
     parser.add_argument("--activation_fn", type=str, default="relu")
     parser.add_argument("--gated_mlp", action=argparse.BooleanOptionalAction)
     parser.add_argument("--n_layers", type=int, default=2)
-    parser.add_argument("--n_ctx", type=int, default=3)
+    parser.add_argument("--n_ctx", type=int, default=302)
     parser.add_argument("--layer_norm", type=str, default=None)
-    parser.add_argument("--batch_size", type=int, default=64)
-    parser.add_argument("--train_epochs", type=int, default=10)
+    parser.add_argument("--batch_size", type=int, default=128)
+    parser.add_argument("--train_epochs", type=int, default=100)
     parser.add_argument("--test_epochs", type=int, default=3)
     parser.add_argument("--optimizer", type=str, default="AdamW")
     parser.add_argument(
@@ -43,10 +43,10 @@ def parse_args():
     )
     parser.add_argument("--mode", type=str, default="rtg")
     parser.add_argument("--warm_up_steps", type=int, default=1000)
-    parser.add_argument("--learning_rate", type=float, default=0.001)
+    parser.add_argument("--learning_rate", type=float, default=5e-5)
     parser.add_argument("--lr_end", type=float, default=10e-8)
     parser.add_argument("--num_cycles", type=int, default=3)
-    parser.add_argument("--weight_decay", type=float, default=0.01)
+    parser.add_argument("--weight_decay", type=float, default=0.001)
     parser.add_argument("--state_embedding", type=str, default="grid")
     parser.add_argument(
         "--linear_time_embedding",
@@ -59,7 +59,7 @@ def parse_args():
     parser.add_argument(
         "--track",
         type=bool,
-        default=False,
+        default=True,
         action=argparse.BooleanOptionalAction,
     )
     parser.add_argument(
@@ -76,11 +76,10 @@ def parse_args():
         "--initial_rtg",
         action="append",
         help="<Required> Set flag",
-        required=False,
-        default=[],
+        default=[1],
     )
-    parser.add_argument("--prob_go_from_end", type=float, default=0.1)
-    parser.add_argument("--eval_max_time_steps", type=int, default=1000)
+    parser.add_argument("--prob_go_from_end", type=float, default=0.5)
+    parser.add_argument("--eval_max_time_steps", type=int, default=200)
     parser.add_argument("--cuda", action=argparse.BooleanOptionalAction)
     parser.add_argument(
         "--model_type", type=str, default="decision_transformer"

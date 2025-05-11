@@ -197,7 +197,7 @@ class OfflineTrainConfig:
     model_type: str = "decision_transformer"
     track: bool = False
     device: str = "cpu"
-    mlp_train_epochs: int = 15
+    mlp_train_epochs: int = 100
     task_loss_weight: float = 0.1     # ✅ task classification loss 가중치
     mode: str = "rtg"
 

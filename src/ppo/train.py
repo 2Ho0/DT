@@ -179,9 +179,9 @@ def train_random(
             #     print(f"[INFO] Reached {success_count} successful episodes. Writing to file and stopping.")
             #     trajectory_writer.write()
             #     break
-            
-            trajectory_writer.write(upload_to_wandb=run_config.track)
-            trajectory_writer.reset()
+            #
+            # trajectory_writer.write(upload_to_wandb=run_config.track)
+            # trajectory_writer.reset()
 
             # if successful_episodes > 0:
             #     trajectory_writer.write(upload_to_wandb=run_config.track)
@@ -202,9 +202,21 @@ def train_random(
 
     if run_config.track:
         checkpoint_num = store_model_checkpoint(
-            agent, online_config, run_config, checkpoint_num, checkpoint_artifact
+            agent,
+            online_config,
+            run_config,
+            checkpoint_num,
+            checkpoint_artifact,
         )
-        wandb.log_artifact(checkpoint_artifact)
+        wandb.log_artifact(checkpoint_artifact)  # Upload checkpoints to wandb
+
+    if trajectory_writer is not None:
+        trajectory_writer.tag_terminated_trajectories()
+        trajectory_writer.write(upload_to_wandb=run_config.track)
+
+    envs.close()
+
+    return agent
 
 
 # def train_random(

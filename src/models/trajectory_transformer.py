@@ -4,13 +4,13 @@ from typing import Tuple
 import numpy as np
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
 from einops import rearrange
 from gymnasium.spaces import Box, Dict
 from torchtyping import TensorType as TT
 from transformer_lens import HookedTransformer, HookedTransformerConfig
 
 from src.config import EnvironmentConfig, TransformerModelConfig
-import torch.nn.functional as F
 from .components import (
     MiniGridConvEmbedder,
     PosEmbedTokens,
@@ -298,7 +298,7 @@ class TrajectoryTransformer(nn.Module):
 
 
 class DecisionTransformer(TrajectoryTransformer):
-    def __init__(self, environment_config, transformer_config, num_tasks: int, penalty_dim: int = 256, smoothing: float = 0.1,**kwargs):
+    def __init__(self, environment_config, transformer_config, num_tasks: int, penalty_dim: int = 1024, smoothing: float = 0.1,**kwargs):
         super().__init__(
             environment_config=environment_config,
             transformer_config=transformer_config,
@@ -311,22 +311,36 @@ class DecisionTransformer(TrajectoryTransformer):
             nn.Linear(1, self.transformer_config.d_model, bias=False)
         )
         self.reward_predictor = nn.Linear(self.transformer_config.d_model, 1)
+
+        dummy = np.zeros((self.transformer_config.n_ctx))
+        if self.transformer_config.mode == 'state':
+            dummy = dummy[::3]
+        elif self.transformer_config.mode == "rtg":
+            dummy = dummy[2::3]
+        elif self.transformer_config.mode == "action":
+            dummy = dummy[1::3]
+
         self.penultimate_layer = nn.Sequential(
-            nn.LayerNorm(self.transformer_config.d_model),
-            nn.Linear(self.transformer_config.d_model, penalty_dim),
+            nn.Linear(dummy.shape[0]*self.transformer_config.d_model, penalty_dim//2),
             nn.ReLU(),
-            nn.Linear(penalty_dim, penalty_dim),
-            nn.ReLU(),
-            nn.LayerNorm(penalty_dim),
-            nn.Linear(penalty_dim, penalty_dim // 2),
-            nn.ReLU(),
-            nn.LayerNorm(penalty_dim // 2),
-            nn.Dropout(0.3),
-           
         )
 
+        # self.penultimate_layer = nn.Sequential(
+        #     nn.LayerNorm(self.transformer_config.d_model),
+        #     nn.Linear(self.transformer_config.d_model, penalty_dim),
+        #     nn.ReLU(),
+        #     nn.Linear(penalty_dim, penalty_dim),
+        #     nn.ReLU(),
+        #     nn.LayerNorm(penalty_dim),
+        #     nn.Linear(penalty_dim, penalty_dim // 2),
+        #     nn.ReLU(),
+        #     nn.LayerNorm(penalty_dim // 2),
+        #     nn.Dropout(0.3),
+        #
+        # )
+
         self.output_layer = nn.Sequential(
-            nn.Linear(penalty_dim // 2, num_tasks)
+            nn.Linear(penalty_dim//2, num_tasks)
         )
         # n_ctx include full timesteps except for the last where it doesn't know the action
         assert (transformer_config.n_ctx - 2) % 3 == 0
@@ -563,7 +577,16 @@ class DecisionTransformer(TrajectoryTransformer):
 
         if mlp_learn:
             # ✅ 항상 transformer 출력 사용 (통합적 표현)
-            pooled = x.mean(dim=1)
+
+            if mode == "state":
+                pooled = x[:, ::3, :].detach().clone().view(batch_size, -1)
+            elif mode == "rtg":
+                pooled = x[:, 2::3, :].detach().clone().view(batch_size, -1)
+            elif mode == "action":
+                pooled = x[:, 1::3, :].detach().clone().view(batch_size, -1)
+            else:
+                raise ValueError(f"Unsupported mode for MLP task classification: {mode}")
+
             penultimate_out = self.penultimate_layer(pooled)
             task_preds = self.output_layer(penultimate_out)
             return state_preds, action_preds, reward_preds, task_preds
