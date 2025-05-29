@@ -151,23 +151,6 @@ def train_random(
 
         agent.rollout(memory, online_config.num_steps, envs, trajectory_writer)
 
-        if trajectory_writer is not None:
-            try:
-                env_id = envs.envs[0].spec.id
-                if "DoorKey" in env_id:
-                    task_id = 0
-                elif "LavaCrossing" in env_id:
-                    task_id = 1
-                elif "SimpleCrossing" in env_id:
-                    task_id = 2
-                else:
-                    task_id = -1
-            except:
-                task_id = getattr(envs.envs[0], "task_id", 0)
-
-            trajectory_writer.add_metadata({"task_id": task_id})
-            trajectory_writer.tag_terminated_trajectories()
-            
             # successful_episodes = count_successful_episodes(trajectory_writer)  # ✅ 함수 구현 필요
             # success_count += successful_episodes
         
@@ -200,6 +183,26 @@ def train_random(
         progress_bar.set_description(output)
         memory.reset()
 
+    if trajectory_writer is not None:
+        try:
+            env_id = envs.envs[0].spec.id
+            if "DoorKey" in env_id:
+                task_id = 0
+            elif "LavaCrossing" in env_id:
+                task_id = 1
+            elif "SimpleCrossing" in env_id:
+                task_id = 2
+            else:
+                task_id = -1
+        except:
+            task_id = getattr(envs.envs[0], "task_id", 0)
+
+        trajectory_writer.add_metadata({"task_id": task_id})
+        trajectory_writer.tag_terminated_trajectories()
+
+        trajectory_writer.write(upload_to_wandb=run_config.track)
+        trajectory_writer.reset()
+
     if run_config.track:
         checkpoint_num = store_model_checkpoint(
             agent,
@@ -210,12 +213,7 @@ def train_random(
         )
         wandb.log_artifact(checkpoint_artifact)  # Upload checkpoints to wandb
 
-    if trajectory_writer is not None:
-        trajectory_writer.tag_terminated_trajectories()
-        trajectory_writer.write(upload_to_wandb=run_config.track)
-
     envs.close()
-
     return agent
 
 

@@ -589,7 +589,7 @@ class DecisionTransformer(TrajectoryTransformer):
 
             penultimate_out = self.penultimate_layer(pooled)
             task_preds = self.output_layer(penultimate_out)
-            return state_preds, action_preds, reward_preds, task_preds
+            return state_preds, action_preds, reward_preds, task_preds, penultimate_out
         else:
             return state_preds, action_preds, reward_preds
 

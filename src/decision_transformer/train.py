@@ -37,7 +37,7 @@ def train(
 
     # 전체 학습 데이터의 task_label 수집 필요
     # modify task weight
-    task_labels_list = [0] * 400 + [1] * 500 + [2] * 400
+    task_labels_list = [0] * 9506 + [1] * 11024 + [2] * 8562
     class_weights = compute_class_weight(class_weight='balanced', classes=np.array([0,1,2]), y=task_labels_list)
     print("Class Weights:", class_weights)
 
@@ -240,7 +240,7 @@ def train(
             a[a == -10] = env.action_space.n
             action = a[:, :-1].unsqueeze(-1) if a.shape[1] > 1 else None
 
-            state_preds, action_preds, reward_preds, task_preds = model(
+            state_preds, action_preds, reward_preds, task_preds, _ = model(
                 states=s,
                 actions=action,
                 rtgs=rtg,
@@ -291,7 +291,7 @@ def train(
             pbar_mlp.set_description(f"MLP Fine-Tuning: task_loss = {task_loss.item():.4f}")
             
 
-    test(
+    result = test(
         model=model,
         dataloader=test_dataloader,
         env=env,
@@ -302,7 +302,7 @@ def train(
         class_weights=weight_tensor,
         device=device
     )
-    return model
+    return result
 
 
 @pytest.mark.skip(reason="This is not a test")
@@ -333,6 +333,7 @@ def test(
 
     all_task_preds = []
     all_task_labels = []
+    all_embeddings = []
     task_correct = {}
     task_total = {}
 
@@ -342,18 +343,32 @@ def test(
     for epoch in pbar:
         for batch, (s, a, r, d, rtg, ti, m, task_id) in enumerate(dataloader):
             if model.transformer_config.time_embedding_type == "linear":
-                ti = ti.to(torch.float32)
+                ti = ti.to(t.float32)
 
             a[a == -10] = env.action_space.n
             action = a[:, :-1].unsqueeze(-1) if a.shape[1] > 1 else None
             with t.no_grad():
-                state_preds, action_preds, reward_preds, task_preds = model(
+                state_preds, action_preds, reward_preds, task_preds, penultimate_out = model(
                     states=s,
                     actions=action,
                     rtgs=rtg,
                     timesteps=ti.unsqueeze(-1),
                     mlp_learn=True,
                 )
+
+            def match_task_ids(task_id, embedding_tensor):
+                N = embedding_tensor.shape[0]
+                B = task_id.shape[0]
+                repeats = N // B
+                expanded = task_id.repeat_interleave(repeats)
+
+                if expanded.shape[0] > N:
+                    expanded = expanded[:N]
+                elif expanded.shape[0] < N:
+                    print(f"?? Padding task_ids with last label. ({expanded.shape[0]} ¡æ {N})")
+                    pad = t.full((N - expanded.shape[0],), expanded[-1], dtype=expanded.dtype)
+                    expanded = t.cat([expanded, pad])
+                return expanded
 
             if mode == "state":
                 state_preds = state_preds[:, :-1]
@@ -362,6 +377,10 @@ def test(
 
                 main_loss += nn.MSELoss()(state_preds, s_exp).item()
                 main_total += s_exp.shape[0]
+                # all_embeddings.append(state_preds.reshape(-1, state_preds.shape[-1]).cpu())
+                #
+                # task_ids_expanded = match_task_ids(task_id, state_preds)
+                # all_task_labels.extend(task_ids_expanded.cpu().tolist())
 
             elif mode == "action":
                 action_preds = action_preds[:, :-1]
@@ -376,6 +395,13 @@ def test(
                 main_loss += loss_fn(action_preds, a_exp).item()
                 main_total += a_exp.shape[0]
                 main_correct += (a_hat == a_exp).sum().item()
+                # reshaped = action_preds.reshape(-1, action_preds.shape[-1]).cpu()
+                # all_embeddings.append(reshaped)
+                #
+                # task_ids_expanded = match_task_ids(task_id, reshaped)
+                # all_task_labels.extend(task_ids_expanded.cpu().tolist())
+
+
 
             elif mode == "rtg":
                 reward_preds = reward_preds[:, :-1]
@@ -384,7 +410,18 @@ def test(
 
                 main_loss += nn.MSELoss()(reward_preds.squeeze(-1), r_exp).item()
                 main_total += r_exp.shape[0]
+                # all_embeddings.append(reward_preds.reshape(-1, reward_preds.shape[-1]).cpu())
+                #
+                # task_ids_expanded = match_task_ids(task_id, reward_preds)
+                # all_task_labels.extend(task_ids_expanded.cpu().tolist())
 
+            embeddings = penultimate_out  # shape: (B, D)
+            all_embeddings.append(embeddings.cpu())
+
+            task_ids_expanded = match_task_ids(task_id, embeddings)
+            all_task_labels.extend(task_ids_expanded.cpu().tolist())
+
+            print("all_task_labels: ", len(all_task_labels))
             # ✅ Task classification evaluation
             if task_id is not None:
                 has_task_labels = True
@@ -399,7 +436,7 @@ def test(
 
                 # 분포 기록
                 all_task_preds.extend(task_pred.cpu().tolist())
-                all_task_labels.extend(task_id.cpu().tolist())
+                # all_task_labels.extend(task_id.cpu().tolist())
 
                 # 개별 task 정확도 기록
                 for pred, true in zip(task_pred.cpu(), task_id.cpu()):
@@ -429,24 +466,77 @@ def test(
             print(f"- Task {tid}: {acc:.4f} ({task_correct[tid]}/{task_total[tid]})")
 
     # wandb 로그
-    if track:
-        wandb.log({f"test/{mode}_loss": mean_main_loss}, step=batch_number)
-        if mode == "action":
-            wandb.log({f"test/{mode}_accuracy": main_accuracy}, step=batch_number)
 
-        if has_task_labels:
-            wandb.log({
-                "test/task_loss": mean_task_loss,
-                "test/task_accuracy": task_accuracy,
-                "test/task_pred_distribution": wandb.Histogram(all_task_preds),
-                "test/task_true_distribution": wandb.Histogram(all_task_labels),
-            }, step=batch_number)
+    wandb.log({f"test/{mode}_loss": mean_main_loss}, step=batch_number)
+    if mode == "action":
+        wandb.log({f"test/{mode}_accuracy": main_accuracy}, step=batch_number)
 
-            for task_id in task_total:
-                acc = task_correct[task_id] / task_total[task_id]
-                wandb.log({f"test/task{task_id}_accuracy": acc}, step=batch_number)
+    if has_task_labels:
+        wandb.log({
+            "test/task_loss": mean_task_loss,
+            "test/task_accuracy": task_accuracy,
+            "test/task_pred_distribution": wandb.Histogram(all_task_preds),
+            "test/task_true_distribution": wandb.Histogram(all_task_labels),
+        }, step=batch_number)
 
-    return mean_main_loss, main_accuracy, mean_task_loss, task_accuracy
+        for task_id in task_total:
+            acc = task_correct[task_id] / task_total[task_id]
+            wandb.log({f"test/task{task_id}_accuracy": acc}, step=batch_number)
+
+    from sklearn.metrics import confusion_matrix, ConfusionMatrixDisplay
+    import matplotlib.pyplot as plt
+    import numpy as np
+
+    if has_task_labels:
+        true_labels = np.array(all_task_labels)
+        pred_labels = np.array(all_task_preds)
+
+        # (1) Raw confusion matrix
+        cm_raw = confusion_matrix(true_labels, pred_labels, normalize=None)
+        disp_raw = ConfusionMatrixDisplay(confusion_matrix=cm_raw)
+
+        print("\n[Raw Confusion Matrix] (Counts)")
+        print(cm_raw)
+
+        plt.figure(figsize=(8, 6))
+        disp_raw.plot(cmap=plt.cm.Blues, values_format='d')
+        plt.title("Task Confusion Matrix (Raw Count)")
+        plt.xlabel("Predicted Label")
+        plt.ylabel("True Label")
+        plt.grid(False)
+        plt.tight_layout()
+        plt.savefig("confusion_matrix_raw.png")
+        print("Saved raw confusion matrix to: confusion_matrix_raw.png")
+        plt.close()
+
+        # (2) Normalized confusion matrix
+        cm_norm = confusion_matrix(true_labels, pred_labels, normalize='true')
+        disp_norm = ConfusionMatrixDisplay(confusion_matrix=cm_norm)
+
+        print("\n[Normalized Confusion Matrix] (Per-Row Proportions)")
+        print(np.round(cm_norm, 2))  # ¼Ò¼öÁ¡ 2ÀÚ¸®·Î º¸±â ÁÁ°Ô
+
+        plt.figure(figsize=(8, 6))
+        disp_norm.plot(cmap=plt.cm.Blues, values_format=".2f")
+        plt.title("Task Confusion Matrix (Normalized)")
+        plt.xlabel("Predicted Label")
+        plt.ylabel("True Label")
+        plt.grid(False)
+        plt.tight_layout()
+        plt.savefig("confusion_matrix_normalized.png")
+        print("Saved normalized confusion matrix to: confusion_matrix_normalized.png")
+        plt.close()
+
+    all_embeddings_tensor = t.cat(all_embeddings, dim=0)  # ¡æ (N, D)
+    all_task_labels_tensor = t.tensor(all_task_labels)
+    print("all_task_labels: ", len(all_task_labels))
+    print("all_task_labels_tensor: ", all_task_labels_tensor.shape)
+
+    return {
+        "model": model,
+        "embeddings": all_embeddings_tensor,  # (NEW)
+        "task_ids": all_task_labels_tensor,
+    }
 
 
 def get_dataloaders(trajectory_data_set, offline_config):

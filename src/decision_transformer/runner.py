@@ -118,7 +118,7 @@ def run_decision_transformer(
     )
    
 
-    model = train(
+    result = train(
         model=model,
         trajectory_data_set=task_datasets,
         env=env,
@@ -138,21 +138,22 @@ def run_decision_transformer(
 
         store_transformer_model(
             path=model_path,
-            model=model,
+            model=result["model"],
             offline_config=offline_config,
+            embeddings=result["embeddings"],
+            task_ids = result["task_ids"]
         )
 
         artifact = wandb.Artifact(run_name, type="model")
         artifact.add_file(model_path)
         wandb.log_artifact(artifact)
-        os.remove(model_path)
+        
 
         wandb.finish()
 
 
-def store_transformer_model(path, model, offline_config):
-    t.save(
-        {
+def store_transformer_model(path, model, offline_config, embeddings = None, task_ids = None):
+    save_dict = {
             "model_state_dict": model.state_dict(),
             "offline_config": json.dumps(
                 offline_config, cls=ConfigJsonEncoder
@@ -163,9 +164,13 @@ def store_transformer_model(path, model, offline_config):
             "model_config": json.dumps(
                 model.transformer_config, cls=ConfigJsonEncoder
             ),
-        },
-        path,
-    )
+        }
+    if embeddings is not None:
+        save_dict["eval_embeddings"] = embeddings.cpu()
+    if task_ids is not None:
+        save_dict["eval_task_ids"] = task_ids.cpu()
+
+    t.save(save_dict, path)
 
 
 def set_device(run_config):
