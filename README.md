@@ -3,6 +3,66 @@
 [![build](https://github.com/jbloomAus/DecisionTransformerInterpretability/actions/workflows/build.yml/badge.svg)](https://github.com/jbloomAus/DecisionTransformerInterpretability/actions/workflows/build.yml)
 [![Code style: black](https://img.shields.io/badge/code%20style-black-000000.svg)](https://github.com/psf/black)
 
+
+## Make Offline Data
+```
+python -m src.run_ppo --exp_name "Test" \
+    --seed 1 \
+    --cuda \
+    --track \
+    --wandb_project_name "PPO-MiniGrid" \
+    --env_id "MiniGrid-DoorKey-8x8-v0" \
+    --view_size 7 \
+    --total_timesteps 350000 \
+    --learning_rate 0.00025 \
+    --num_envs 32 \
+    --num_steps 128 \
+    --num_minibatches 4 \
+    --update_epochs 4 \
+    --clip_coef 0.2 \
+    --ent_coef 0.01 \
+    --vf_coef 0.5 \
+    --max_steps 200 \
+    --one_hot_obs
+```
+Set ```--env_id``` to the specific environment you want to run.
+
+## Train Online Data
+```
+python -m src.run_decision_transformer \
+    --exp_name MiniGrid-Dynamic-Obstacles-8x8-v0-Refactor \
+    --trajectory_path trajectories/DoorKey3000.gz trajectories/LavaCrossing2.gz trajectories/SimpleCrossing2.gz  \
+    --d_model 256 \
+    --n_heads 4 \
+    --d_mlp 256 \
+    --n_layers 2 \
+    --learning_rate 5e-5 \
+    --batch_size 128 \
+    --train_epochs 100 \
+    --test_epochs 10 \
+    --n_ctx 302 \
+    --pct_traj 1 \
+    --weight_decay 0.001 \
+    --seed 1 \
+    --wandb_project_name DecisionTransformerInterpretability-Dev \
+    --test_frequency 1 \
+    --eval_frequency 1 \
+    --eval_episodes 10 \
+    --initial_rtg 1 \
+    --prob_go_from_end 0.5 \
+    --eval_max_time_steps 200 \
+    --track
+```
+change --trajectory_path to the path of your offline dataset
+In src/config.py set the mode variable to one of the following: "rtg", "action" or "state", depending on your training target
+In src/decision_transformer/train.py, line 36, update ```task_labels_list = [0] * 9506 + [1] * 11024 + [2] * 8562``` to match the number of trajectories in your dataset for each task
+
+## PCA
+You can check the PCA distribution in /models/pca.py
+Make sure to update the line ```checkpoint = torch.load("rtg.pt", map_location='cpu')```
+to match the path of your .pt checkpoint file
+
+
 # [Docs Here](https://jbloomaus.github.io/DecisionTransformerInterpretability/) [App Here](https://jbloomaus-decisiontransformerinterpretability-app-4edcnc.streamlit.app/)
 
 This project is designed to facilitate mechanistic interpretability of decision transformers as well as RL agents using transformer architectures.
