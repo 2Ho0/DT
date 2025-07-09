@@ -4,15 +4,11 @@ import torch.nn as nn
 from einops import rearrange
 from dataclasses import asdict
 from torch.utils.data import DataLoader, random_split
-from torch.utils.data.sampler import WeightedRandomSampler
 from tqdm import tqdm
-import numpy as np
 
 import wandb
 from src.config import EnvironmentConfig, OfflineTrainConfig
 from src.models.trajectory_transformer import (
-
-    DecisionTransformer,
     TrajectoryTransformer,
 )
 
@@ -139,11 +135,11 @@ def train(
                 r_exp = rearrange(r.squeeze(-1), "b t -> (b t)").to(t.float32)
                 loss = nn.MSELoss()(reward_preds.squeeze(-1), r_exp)
             
-            print("s[1:].shape (GT):", s[:, 1:].shape) # 128, 100, 7, 7, 20
-            print("state_preds.shape (pred):", state_preds.shape) # 128, 101, 980
-
-            print("r[1:].shape (GT):", r[:, 1:].shape) # 128, 99, 1
-            print("reward_preds.shape (pred):", reward_preds.shape) # 12800, 1
+            # print("s[1:].shape (GT):", s[:, 1:].shape) # 128, 100, 7, 7, 20
+            # print("state_preds.shape (pred):", state_preds.shape) # 128, 101, 980
+            #
+            # print("r[1:].shape (GT):", r[:, 1:].shape) # 128, 99, 1
+            # print("reward_preds.shape (pred):", reward_preds.shape) # 12800, 1
            
             loss.backward()
             optimizer.step()
@@ -377,10 +373,6 @@ def test(
 
                 main_loss += nn.MSELoss()(state_preds, s_exp).item()
                 main_total += s_exp.shape[0]
-                # all_embeddings.append(state_preds.reshape(-1, state_preds.shape[-1]).cpu())
-                #
-                # task_ids_expanded = match_task_ids(task_id, state_preds)
-                # all_task_labels.extend(task_ids_expanded.cpu().tolist())
 
             elif mode == "action":
                 action_preds = action_preds[:, :-1]
@@ -395,13 +387,6 @@ def test(
                 main_loss += loss_fn(action_preds, a_exp).item()
                 main_total += a_exp.shape[0]
                 main_correct += (a_hat == a_exp).sum().item()
-                # reshaped = action_preds.reshape(-1, action_preds.shape[-1]).cpu()
-                # all_embeddings.append(reshaped)
-                #
-                # task_ids_expanded = match_task_ids(task_id, reshaped)
-                # all_task_labels.extend(task_ids_expanded.cpu().tolist())
-
-
 
             elif mode == "rtg":
                 reward_preds = reward_preds[:, :-1]
@@ -410,10 +395,6 @@ def test(
 
                 main_loss += nn.MSELoss()(reward_preds.squeeze(-1), r_exp).item()
                 main_total += r_exp.shape[0]
-                # all_embeddings.append(reward_preds.reshape(-1, reward_preds.shape[-1]).cpu())
-                #
-                # task_ids_expanded = match_task_ids(task_id, reward_preds)
-                # all_task_labels.extend(task_ids_expanded.cpu().tolist())
 
             embeddings = penultimate_out  # shape: (B, D)
             all_embeddings.append(embeddings.cpu())
@@ -603,67 +584,3 @@ def get_dataloaders(trajectory_data_set, offline_config):
     )
 
     return train_dataloader, test_dataloader
-
-
-# def get_dataloaders(trajectory_data_set, offline_config):
-#     """
-#     trajectory_data_set: torch.utils.data.ConcatDataset 형태로 task별 dataset이 결합되어 있음.
-#     WeightedRandomSampler는 사용하지 않고, shuffle=True 기반 학습 구조 사용.
-#     """
-#     # 원본 데이터셋에서 각 태스크별 데이터 수 출력
-#     if isinstance(trajectory_data_set, ConcatDataset):
-#         dataset_list = trajectory_data_set.datasets  # 내부에 합쳐진 데이터셋들 (task별)
-        
-#         task_counts = {}
-#         total = 0
-#         for task_id, dataset in enumerate(dataset_list):
-#             count = len(dataset)
-#             task_counts[task_id] = count
-#             total += count
-
-#         print(f"전체 데이터 수: {total}")
-#         for task_id, count in task_counts.items():
-#             percentage = (count / total) * 100
-#             print(f"Task {task_id}: {count} 샘플 ({percentage:.2f}%)")
-#     else:
-#         print("\n===== 원본 데이터셋 태스크별 분포 =====")
-#         task_counts = {task_id: len(dataset) for task_id, dataset in trajectory_data_set.items()}
-#         total = sum(task_counts.values())
-#         print(f"전체 데이터 수: {total}")
-#         for task_id, count in task_counts.items():
-#             percentage = (count / total) * 100
-#             print(f"Task {task_id}: {count} 샘플 ({percentage:.2f}%)")
-        
-#         # ConcatDataset으로 변환
-#         trajectory_data_set = ConcatDataset(list(trajectory_data_set.values()))
-
-#     total = len(trajectory_data_set)
-#     train_size = int(0.7 * total)
-#     test_size = total - train_size
-
-#     print(f"\n===== 학습/테스트 데이터 분할 =====")
-#     print(f"학습 데이터: {train_size} 샘플 ({train_size/total*100:.2f}%)")
-#     print(f"테스트 데이터: {test_size} 샘플 ({test_size/total*100:.2f}%)")
-
-#     train_dataset, test_dataset = random_split(
-#         trajectory_data_set,
-#         [train_size, test_size],
-#         generator=t.Generator().manual_seed(42)  # reproducibility
-#     )
-
-#     train_dataloader = DataLoader(
-#         train_dataset,
-#         batch_size=offline_config.batch_size,
-#         shuffle=True,  # ✅ 학습용은 반드시 섞기
-#         drop_last=True,
-#     )
-
-#     test_dataloader = DataLoader(
-#         test_dataset,
-#         batch_size=offline_config.batch_size,
-#         shuffle=True,  # ✅ 테스트 시에도 섞어서 다양한 task 조합 확인 가능
-#         drop_last=False,
-#     )
-
-#     return train_dataloader, test_dataloader
-

@@ -37,10 +37,10 @@ pca_result = pca.fit_transform(embeddings_sampled)
 
 # Define colors
 color_map = {0: "red", 1: "green", 2: "blue"}
-label_map = {0: "Task 0", 1: "Task 1", 2: "Task 2"}
+label_map = {0: "DoorKey", 1: "LavaCrossing", 2: "SimpleCrossing"}
 
 # Plot
-plt.figure(figsize=(10, 7))
+plt.figure(figsize=(20,14))
 for tid in unique:
     mask = task_ids_sampled == tid
     plt.scatter(
@@ -48,15 +48,14 @@ for tid in unique:
         pca_result[mask, 1],
         c=color_map[tid],
         label=label_map[tid],
-        alpha=0.4,
-        s=2
+        alpha=0.2,
+        s=10
     )
 
-plt.title("PCA of eval_embeddings (equal samples per task)")
-plt.xlabel("PC1")
-plt.ylabel("PC2")
-plt.legend()
+plt.title("PCA of Rtg", fontsize=30)
+plt.legend(markerscale=5, fontsize=30)
+
 plt.grid(True)
 plt.tight_layout()
-plt.savefig("pca_equal_samples.png")
+plt.savefig("poster_rtg.png")
 plt.show()

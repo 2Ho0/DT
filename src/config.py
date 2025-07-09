@@ -199,7 +199,7 @@ class OfflineTrainConfig:
     device: str = "cpu"
     mlp_train_epochs: int = 100
     task_loss_weight: float = 0.1     # ✅ task classification loss 가중치
-    mode: str = "rtg"
+    mode: str = "state"
 
     def __post_init__(self):
         assert self.model_type in ["decision_transformer", "clone_transformer"]
