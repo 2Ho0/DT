@@ -53,14 +53,14 @@ python -m src.run_decision_transformer \
     --eval_max_time_steps 200 \
     --track
 ```
-change --trajectory_path to the path of your offline dataset
-In src/config.py set the mode variable to one of the following: "rtg", "action" or "state", depending on your training target
-In src/decision_transformer/train.py, line 36, update ```task_labels_list = [0] * 9506 + [1] * 11024 + [2] * 8562``` to match the number of trajectories in your dataset for each task
+change ```--trajectory_path``` to the path of your offline dataset
+In ```src/config.py``` set the mode variable to one of the following: "rtg", "action" or "state", depending on your training target
+In ```src/decision_transformer/train.py```, line 36, update ```task_labels_list = [0] * 9506 + [1] * 11024 + [2] * 8562``` to match the number of trajectories in your dataset for each task
 
 ## PCA
 You can check the PCA distribution in /models/pca.py
 Make sure to update the line ```checkpoint = torch.load("rtg.pt", map_location='cpu')```
-to match the path of your .pt checkpoint file
+to match the path of your ```.pt``` checkpoint file
 
 
 # [Docs Here](https://jbloomaus.github.io/DecisionTransformerInterpretability/) [App Here](https://jbloomaus-decisiontransformerinterpretability-app-4edcnc.streamlit.app/)
