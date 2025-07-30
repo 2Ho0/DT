@@ -55,15 +55,19 @@ def train(
         print(f"Task {task_id}: {len(dataset)} 샘플")
 
     # 🟢 모든 task의 dataset을 하나의 ConcatDataset으로 결합
-    combined_dataset = ConcatDataset(list(trajectory_data_set.values()))
+    # combined_dataset = ConcatDataset(list(trajectory_data_set.values()))
+    # train_dataloader, test_dataloader = get_dataloaders(
+    #     combined_dataset, offline_config
+    # )
+
     train_dataloader, test_dataloader = get_dataloaders(
-        combined_dataset, offline_config
+        trajectory_data_set, offline_config
     )
 
     # 첫 번째 배치를 추출하여 각 태스크의 비율 확인
     print("\n===== 첫 배치에서의 태스크 분포 확인 =====")
     first_batch = next(iter(train_dataloader))
-    task_ids = first_batch[7].numpy()  # task_id는 8번째 항목
+    task_ids = first_batch[-1].numpy()  # task_id는 8번째 항목
     unique_tasks, counts = np.unique(task_ids, return_counts=True)
     for task, count in zip(unique_tasks, counts):
         print(f"Task {task}: {count} 샘플 ({count/len(task_ids)*100:.2f}%)")
@@ -75,10 +79,10 @@ def train(
     del scheduler_config["optimizer"]
 
     # get total number of training steps.
-    train_batches_per_epoch = len(train_dataloader)
-    scheduler_config["training_steps"] = (
-        offline_config.train_epochs * train_batches_per_epoch
-    )
+
+    # scheduler_config["training_steps"] = (
+    #     offline_config.train_epochs * train_batches_per_epoch
+    # )
     scheduler = get_scheduler(
         offline_config.scheduler, optimizer, **scheduler_config
     )
@@ -86,8 +90,7 @@ def train(
     # wandb.watch(model, log="all", log_freq=train_batches_per_epoch)
     pbar = tqdm(range(offline_config.train_epochs))
     for epoch in pbar:
-        for batch, (s, a, r, d, rtg, ti, m, _) in enumerate(train_dataloader):
-            total_batches = epoch * train_batches_per_epoch + batch
+        for batch, (s, a, r, d, rtg, ti, m, _, task_id) in enumerate(train_dataloader):
 
             model.train()
 
@@ -112,34 +115,22 @@ def train(
             if mode == 'state':
                 state_preds = state_preds[:, :-1] # choose all of first index and choose index from start to before end
                 state_preds = rearrange(state_preds, "b t s -> (b t) s") # 128, 4, 7, 7, 20
-                print('s.shape:', s.shape)
-                print('state_preds.shape:', state_preds.shape)
                 s_exp = rearrange(s[:, 1:], "b t h w c -> (b t) (h w c)").to(t.float32)
                 loss = nn.MSELoss()(state_preds, s_exp)
 
             elif mode == 'action':
                 action_preds = action_preds[:, :-1]
                 action_preds = rearrange(action_preds, "b t a -> (b t) a")
-                print('a.shape:', a.shape)
-                print('action_preds.shape:', action_preds.shape)
                 a_exp = rearrange(a[:, 1:], "b t -> (b t)").to(t.int64)
                 mask = a_exp != env.action_space.n
                 loss = loss_fn(action_preds[mask], a_exp[mask])
 
             elif mode == 'rtg':
                 reward_preds = reward_preds[:, :-1]
-                r = r[:, 1:]
-                print('r.shape:', r.shape) # 128, 100, 1
-                reward_preds = rearrange(reward_preds, "b t s -> (b t) s")
-                print('reward_preds.shape:', reward_preds.shape) # 12800, 1
+                r = r[:, 1:] # 128, 100, 1
+                reward_preds = rearrange(reward_preds, "b t s -> (b t) s") # 12800, 1
                 r_exp = rearrange(r.squeeze(-1), "b t -> (b t)").to(t.float32)
                 loss = nn.MSELoss()(reward_preds.squeeze(-1), r_exp)
-            
-            # print("s[1:].shape (GT):", s[:, 1:].shape) # 128, 100, 7, 7, 20
-            # print("state_preds.shape (pred):", state_preds.shape) # 128, 101, 980
-            #
-            # print("r[1:].shape (GT):", r[:, 1:].shape) # 128, 99, 1
-            # print("reward_preds.shape (pred):", reward_preds.shape) # 12800, 1
            
             loss.backward()
             optimizer.step()
@@ -147,27 +138,11 @@ def train(
 
             pbar.set_description(f"Training DT: {loss.item():.4f}")
 
-            #
             if offline_config.track:
-                tokens_seen = (
-                    (total_batches + 1)
-                    * offline_config.batch_size
-                    * model.transformer_config.n_ctx
-                )
-                learning_rate = optimizer.param_groups[0]["lr"]
                 wandb.log({
                     "train/loss": loss.item(),
                 })
 
-                wandb.log(
-                    {"metrics/tokens_seen": tokens_seen}, step=total_batches
-                )
-                wandb.log(
-                    {"metrics/learning_rate": learning_rate},
-                    step=total_batches,
-                )
-
-        batch_number = epoch * train_batches_per_epoch
         # at test frequency
             
         representative_dataset = list(trajectory_data_set.values())[0]
@@ -200,13 +175,13 @@ def train(
                     env_func=eval_env_func,
                     trajectories=offline_config.eval_episodes,
                     track=offline_config.track,
-                    batch_number=batch_number,
+                    # batch_number=batch_number,
                     initial_rtg=float(rtg),
                     device=device,
                     num_envs=offline_config.eval_num_envs,
                 )
 
-    # MLP training start!!
+    # MLP training start
     # Step 2: Freeze all except MLP layers (penultimate_layer, output_layer)
     print("\n🔒 Freezing all layers except MLP (penultimate_layer, output_layer)")
     for name, param in model.named_parameters():
@@ -228,7 +203,7 @@ def train(
     # MLP만을 위한 추가 학습 루프
     pbar_mlp = tqdm(range(offline_config.mlp_train_epochs), desc="MLP Fine-Tuning")
     for epoch in pbar_mlp:
-        for batch, (s, a, r, d, rtg, ti, m, task_id) in enumerate(train_dataloader):
+        for batch, (s, a, r, d, rtg, ti, m, _, task_id) in enumerate(train_dataloader):
             model.train()
             if model.transformer_config.time_embedding_type == "linear":
                 ti = ti.to(t.float32)
@@ -285,7 +260,6 @@ def train(
             scheduler.step()
             
             pbar_mlp.set_description(f"MLP Fine-Tuning: task_loss = {task_loss.item():.4f}")
-            
 
     result = test(
         model=model,
@@ -293,7 +267,7 @@ def train(
         env=env,
         epochs=offline_config.test_epochs,
         track=offline_config.track,
-        batch_number=batch_number,
+        # batch_number=batch_number,
         mode = mode,
         class_weights=weight_tensor,
         device=device
@@ -326,6 +300,7 @@ def test(
     n_task_correct = 0
     n_task_total = 0
     has_task_labels = False
+    pre_task = 0
 
     all_task_preds = []
     all_task_labels = []
@@ -337,7 +312,7 @@ def test(
     test_batches_per_epoch = len(dataloader)
 
     for epoch in pbar:
-        for batch, (s, a, r, d, rtg, ti, m, task_id) in enumerate(dataloader):
+        for batch, (s, a, r, d, rtg, ti, m, _, task_id) in enumerate(dataloader):
             if model.transformer_config.time_embedding_type == "linear":
                 ti = ti.to(t.float32)
 
@@ -351,20 +326,6 @@ def test(
                     timesteps=ti.unsqueeze(-1),
                     mlp_learn=True,
                 )
-
-            def match_task_ids(task_id, embedding_tensor):
-                N = embedding_tensor.shape[0]
-                B = task_id.shape[0]
-                repeats = N // B
-                expanded = task_id.repeat_interleave(repeats)
-
-                if expanded.shape[0] > N:
-                    expanded = expanded[:N]
-                elif expanded.shape[0] < N:
-                    print(f"?? Padding task_ids with last label. ({expanded.shape[0]} ¡æ {N})")
-                    pad = t.full((N - expanded.shape[0],), expanded[-1], dtype=expanded.dtype)
-                    expanded = t.cat([expanded, pad])
-                return expanded
 
             if mode == "state":
                 state_preds = state_preds[:, :-1]
@@ -402,22 +363,58 @@ def test(
             task_ids_expanded = match_task_ids(task_id, embeddings)
             all_task_labels.extend(task_ids_expanded.cpu().tolist())
 
-            print("all_task_labels: ", len(all_task_labels))
             # ✅ Task classification evaluation
             if task_id is not None:
                 has_task_labels = True
+                task_shift_detected = False
                 task_id = task_id.to(task_preds.device)
                 task_loss += model.label_smoothing_loss(task_preds, task_id, class_weights=class_weights).item()
 
                 print('task_preds: ', task_preds)
                 task_pred = t.argmax(task_preds, dim=-1)
                 print(f"task_pred: {task_pred}, task_id: {task_id}")
+
+                # Check Task Changing
+                recent_k = s.shape[0] // 16 # recent_k = 8
+
+                # (1) recent task predictions
+                recent_task_preds = task_preds[-recent_k:]  # (recent_k, num_tasks)
+                # softmax over task logits
+                task_probs = t.softmax(recent_task_preds, dim=-1)  # (B, num_tasks)
+                mean_task_probs = task_probs.mean(dim=0)  # (num_tasks,) = e.g., (3,)
+
+                max_prob, current_task = t.max(mean_task_probs, dim=-1)  # current_task: int (0~2)
+
+                print("mean_task_probs:", mean_task_probs)
+                print("max_prob:", max_prob)
+                print("current_task:", current_task)
+
+                if pre_task == current_task:
+                    task_shift_detected = False
+                else:
+                    task_shift_detected = True
+                    print("Task shift likely detected: previous =", pre_task, ", current =", current_task)
+
+                pre_task = current_task
+
+                # evaluate real changing
+                task_id_list = task_id.cpu().tolist()
+                real_task_change = any(t != task_id_list[0] for t in task_id_list[1:])
+                correct_detection = int(task_shift_detected == real_task_change)
+
+                wandb.log({
+                    "eval/task_shift_detected": int(task_shift_detected),
+                    "eval/current_task": current_task,
+                    "eval/task_changed_actual": int(real_task_change),
+                    "eval/task_shift_correct": correct_detection,
+                    "eval/task_id_distribution": wandb.Histogram(task_id.cpu().numpy())
+                })
+
                 n_task_correct += (task_pred == task_id).sum().item()
                 n_task_total += task_id.shape[0]
 
                 # 분포 기록
                 all_task_preds.extend(task_pred.cpu().tolist())
-                # all_task_labels.extend(task_id.cpu().tolist())
 
                 # 개별 task 정확도 기록
                 for pred, true in zip(task_pred.cpu(), task_id.cpu()):
@@ -447,7 +444,6 @@ def test(
             print(f"- Task {tid}: {acc:.4f} ({task_correct[tid]}/{task_total[tid]})")
 
     # wandb 로그
-
     wandb.log({f"test/{mode}_loss": mean_main_loss}, step=batch_number)
     if mode == "action":
         wandb.log({f"test/{mode}_accuracy": main_accuracy}, step=batch_number)
@@ -464,49 +460,50 @@ def test(
             acc = task_correct[task_id] / task_total[task_id]
             wandb.log({f"test/task{task_id}_accuracy": acc}, step=batch_number)
 
-    from sklearn.metrics import confusion_matrix, ConfusionMatrixDisplay
-    import matplotlib.pyplot as plt
-    import numpy as np
+    # Check Confusion Matrix
+    # from sklearn.metrics import confusion_matrix, ConfusionMatrixDisplay
+    # import matplotlib.pyplot as plt
+    # import numpy as np
 
-    if has_task_labels:
-        true_labels = np.array(all_task_labels)
-        pred_labels = np.array(all_task_preds)
-
-        # (1) Raw confusion matrix
-        cm_raw = confusion_matrix(true_labels, pred_labels, normalize=None)
-        disp_raw = ConfusionMatrixDisplay(confusion_matrix=cm_raw)
-
-        print("\n[Raw Confusion Matrix] (Counts)")
-        print(cm_raw)
-
-        plt.figure(figsize=(8, 6))
-        disp_raw.plot(cmap=plt.cm.Blues, values_format='d')
-        plt.title("Task Confusion Matrix (Raw Count)")
-        plt.xlabel("Predicted Label")
-        plt.ylabel("True Label")
-        plt.grid(False)
-        plt.tight_layout()
-        plt.savefig("confusion_matrix_raw.png")
-        print("Saved raw confusion matrix to: confusion_matrix_raw.png")
-        plt.close()
-
-        # (2) Normalized confusion matrix
-        cm_norm = confusion_matrix(true_labels, pred_labels, normalize='true')
-        disp_norm = ConfusionMatrixDisplay(confusion_matrix=cm_norm)
-
-        print("\n[Normalized Confusion Matrix] (Per-Row Proportions)")
-        print(np.round(cm_norm, 2))  # ¼Ò¼öÁ¡ 2ÀÚ¸®·Î º¸±â ÁÁ°Ô
-
-        plt.figure(figsize=(8, 6))
-        disp_norm.plot(cmap=plt.cm.Blues, values_format=".2f")
-        plt.title("Task Confusion Matrix (Normalized)")
-        plt.xlabel("Predicted Label")
-        plt.ylabel("True Label")
-        plt.grid(False)
-        plt.tight_layout()
-        plt.savefig("confusion_matrix_normalized.png")
-        print("Saved normalized confusion matrix to: confusion_matrix_normalized.png")
-        plt.close()
+    # if has_task_labels:
+    #     true_labels = np.array(all_task_labels)
+    #     pred_labels = np.array(all_task_preds)
+    #
+    #     # (1) Raw confusion matrix
+    #     cm_raw = confusion_matrix(true_labels, pred_labels, normalize=None)
+    #     disp_raw = ConfusionMatrixDisplay(confusion_matrix=cm_raw)
+    #
+    #     print("\n[Raw Confusion Matrix] (Counts)")
+    #     print(cm_raw)
+    #
+    #     plt.figure(figsize=(8, 6))
+    #     disp_raw.plot(cmap=plt.cm.Blues, values_format='d')
+    #     plt.title("Task Confusion Matrix (Raw Count)")
+    #     plt.xlabel("Predicted Label")
+    #     plt.ylabel("True Label")
+    #     plt.grid(False)
+    #     plt.tight_layout()
+    #     plt.savefig("confusion_matrix_raw.png")
+    #     print("Saved raw confusion matrix to: confusion_matrix_raw.png")
+    #     plt.close()
+    #
+    #     # (2) Normalized confusion matrix
+    #     cm_norm = confusion_matrix(true_labels, pred_labels, normalize='true')
+    #     disp_norm = ConfusionMatrixDisplay(confusion_matrix=cm_norm)
+    #
+    #     print("\n[Normalized Confusion Matrix] (Per-Row Proportions)")
+    #     print(np.round(cm_norm, 2))  # ¼Ò¼öÁ¡ 2ÀÚ¸®·Î º¸±â ÁÁ°Ô
+    #
+    #     plt.figure(figsize=(8, 6))
+    #     disp_norm.plot(cmap=plt.cm.Blues, values_format=".2f")
+    #     plt.title("Task Confusion Matrix (Normalized)")
+    #     plt.xlabel("Predicted Label")
+    #     plt.ylabel("True Label")
+    #     plt.grid(False)
+    #     plt.tight_layout()
+    #     plt.savefig("confusion_matrix_normalized.png")
+    #     print("Saved normalized confusion matrix to: confusion_matrix_normalized.png")
+    #     plt.close()
 
     all_embeddings_tensor = t.cat(all_embeddings, dim=0)  # ¡æ (N, D)
     all_task_labels_tensor = t.tensor(all_task_labels)
@@ -520,67 +517,175 @@ def test(
     }
 
 
+import torch as t
+from torch.utils.data import Dataset, DataLoader, ConcatDataset, random_split
+import random
+
+class MultiTaskBatchDataset(t.utils.data.IterableDataset):
+    def __init__(self, task_datasets: dict, batch_size: int):
+        super().__init__()
+        self.task_datasets = {
+            int(k.replace("task_", "")) if isinstance(k, str) and "task_" in k else int(k): v
+            for k, v in task_datasets.items()
+        }
+        self.batch_size = batch_size
+        self.task_ids = list(self.task_datasets.keys())
+        self.num_batches = sum(len(ds) // self.batch_size for ds in self.task_datasets.values())
+
+    def __iter__(self):
+        loaders = {
+            task_id: iter(DataLoader(
+                ds,
+                batch_size=self.batch_size,
+                shuffle=True,
+                drop_last=True
+            ))
+            for task_id, ds in self.task_datasets.items()
+        }
+
+        for _ in range(self.num_batches):
+            task_id = random.choice(self.task_ids)
+            try:
+                batch = next(loaders[task_id])
+            except StopIteration:
+
+                loaders[task_id] = iter(DataLoader(
+                    self.task_datasets[task_id],
+                    batch_size=self.batch_size,
+                    shuffle=True,
+                    drop_last=True
+                ))
+                batch = next(loaders[task_id])
+            yield (*batch, t.full((self.batch_size,), task_id))
+
+    def __len__(self):
+        return self.num_batches
+
+
+
 def get_dataloaders(trajectory_data_set, offline_config):
     """
-    trajectory_data_set: torch.utils.data.ConcatDataset 또는 Dict[int, Dataset]
-    task별 비율을 유지하며 train/test를 나눕니다.
+    trajectory_data_set: Dict[int, Dataset]
     """
 
-    # ✅ 각 태스크별 데이터셋 확인
     if isinstance(trajectory_data_set, ConcatDataset):
-        dataset_list = trajectory_data_set.datasets
+        raise ValueError("ConcatDataset Dict[int, Dataset] ")
     else:
         dataset_list = list(trajectory_data_set.values())
 
-    print("\n===== 원본 데이터셋 태스크별 분포 =====")
     task_counts = {}
     total = 0
-    for task_id, dataset in enumerate(dataset_list):
+    for task_id, dataset in trajectory_data_set.items():
         count = len(dataset)
         task_counts[task_id] = count
         total += count
 
-    print(f"전체 데이터 수: {total}")
-    for task_id, count in task_counts.items():
-        percentage = (count / total) * 100
-        print(f"Task {task_id}: {count} 샘플 ({percentage:.2f}%)")
-
-    # ✅ task별로 split
-    train_subsets = []
-    test_subsets = []
-    for task_id, dataset in enumerate(dataset_list):
+    # train/test
+    train_datasets = {}
+    test_datasets = {}
+    for task_id, dataset in trajectory_data_set.items():
         count = len(dataset)
         train_size = int(0.7 * count)
         test_size = count - train_size
 
+        seed = 42 + (hash(task_id) % 1000)
+
         train_subset, test_subset = random_split(
             dataset,
             [train_size, test_size],
-            generator=t.Generator().manual_seed(42 + task_id)
+            generator=t.Generator().manual_seed(seed)
         )
-        train_subsets.append(train_subset)
-        test_subsets.append(test_subset)
+        train_datasets[task_id] = train_subset
+        test_datasets[task_id] = test_subset
 
-    # ✅ task별 subset들을 합치기
-    train_dataset = ConcatDataset(train_subsets)
-    test_dataset = ConcatDataset(test_subsets)
+    print(f"total train_datasets: {sum(len(v) for v in train_datasets.values())}")
+    print(f"total test_datasets: {sum(len(v) for v in test_datasets.values())}")
 
-    print(f"\n===== 학습/테스트 데이터 분할 (태스크 균형 유지) =====")
-    print(f"학습 데이터: {len(train_dataset)} 샘플")
-    print(f"테스트 데이터: {len(test_dataset)} 샘플")
+    # DataLoader
+    train_dataset = MultiTaskBatchDataset(train_datasets, batch_size=offline_config.batch_size)
+    test_dataset = MultiTaskBatchDataset(test_datasets, batch_size=offline_config.batch_size)
 
-    train_dataloader = DataLoader(
-        train_dataset,
-        batch_size=offline_config.batch_size,
-        shuffle=True,
-        drop_last=True,
-    )
-
-    test_dataloader = DataLoader(
-        test_dataset,
-        batch_size=offline_config.batch_size,
-        shuffle=True,
-        drop_last=False,
-    )
+    train_dataloader = DataLoader(train_dataset, batch_size=None)
+    test_dataloader = DataLoader(test_dataset, batch_size=None)
 
     return train_dataloader, test_dataloader
+
+# def get_dataloaders(trajectory_data_set, offline_config):
+#     """
+#     trajectory_data_set: torch.utils.data.ConcatDataset 또는 Dict[int, Dataset]
+#     task별 비율을 유지하며 train/test를 나눕니다.
+#     """
+#
+#     # ✅ 각 태스크별 데이터셋 확인
+#     if isinstance(trajectory_data_set, ConcatDataset):
+#         dataset_list = trajectory_data_set.datasets
+#     else:
+#         dataset_list = list(trajectory_data_set.values())
+#
+#     print("\n===== 원본 데이터셋 태스크별 분포 =====")
+#     task_counts = {}
+#     total = 0
+#     for task_id, dataset in enumerate(dataset_list):
+#         count = len(dataset)
+#         task_counts[task_id] = count
+#         total += count
+#
+#     print(f"전체 데이터 수: {total}")
+#     for task_id, count in task_counts.items():
+#         percentage = (count / total) * 100
+#         print(f"Task {task_id}: {count} 샘플 ({percentage:.2f}%)")
+#
+#     # ✅ task별로 split
+#     train_subsets = []
+#     test_subsets = []
+#     for task_id, dataset in enumerate(dataset_list):
+#         count = len(dataset)
+#         train_size = int(0.7 * count)
+#         test_size = count - train_size
+#
+#         train_subset, test_subset = random_split(
+#             dataset,
+#             [train_size, test_size],
+#             generator=t.Generator().manual_seed(42 + task_id)
+#         )
+#         train_subsets.append(train_subset)
+#         test_subsets.append(test_subset)
+#
+#     # ✅ task별 subset들을 합치기
+#     train_dataset = ConcatDataset(train_subsets)
+#     test_dataset = ConcatDataset(test_subsets)
+#
+#     print(f"\n===== 학습/테스트 데이터 분할 (태스크 균형 유지) =====")
+#     print(f"학습 데이터: {len(train_dataset)} 샘플")
+#     print(f"테스트 데이터: {len(test_dataset)} 샘플")
+#
+#     train_dataloader = DataLoader(
+#         train_dataset,
+#         batch_size=offline_config.batch_size,
+#         shuffle=True,
+#         drop_last=True,
+#     )
+#
+#     test_dataloader = DataLoader(
+#         test_dataset,
+#         batch_size=offline_config.batch_size,
+#         shuffle=True,
+#         drop_last=False,
+#     )
+#
+#     return train_dataloader, test_dataloader
+#
+
+def match_task_ids(task_id, embedding_tensor):
+    N = embedding_tensor.shape[0]
+    B = task_id.shape[0]
+    repeats = N // B
+    expanded = task_id.repeat_interleave(repeats)
+
+    if expanded.shape[0] > N:
+        expanded = expanded[:N]
+    elif expanded.shape[0] < N:
+        print(f"?? Padding task_ids with last label. ({expanded.shape[0]} ¡æ {N})")
+        pad = t.full((N - expanded.shape[0],), expanded[-1], dtype=expanded.dtype)
+        expanded = t.cat([expanded, pad])
+    return expanded
