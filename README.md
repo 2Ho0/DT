@@ -31,7 +31,7 @@ Set ```--env_id``` to the specific environment you want to run.
 ```
 python -m src.run_decision_transformer \
     --exp_name MiniGrid-Dynamic-Obstacles-8x8-v0-Refactor \
-    --trajectory_path trajectories/DoorKey3000.gz trajectories/LavaCrossing2.gz trajectories/SimpleCrossing2.gz  \
+    --trajectory_path trajectories/DoorKey1562.gz trajectories/LavaCrossing1250.gz trajectories/SimpleCrossing1406.gz  \
     --d_model 256 \
     --n_heads 4 \
     --d_mlp 256 \
