@@ -11,6 +11,7 @@ import sys
 import os
 
 import wandb
+import ruamel.yaml as yaml
 from src.config import EnvironmentConfig, OfflineTrainConfig
 from src.models.trajectory_transformer import (
     TrajectoryTransformer,
@@ -21,131 +22,13 @@ from .eval import evaluate_dt_agent
 from .utils import configure_optimizers, get_scheduler
 from torch.utils.data import ConcatDataset
 
-# DreamerV3 imports
-sys.path.append('/home/hail/Project/dreamerv3_jax')
-import embodied
-import embodied.jax
-from dreamerv3 import agent as dreamer_agent
 
-class PERBuffer:
-    """Prioritized Experience Replay Buffer with embedding similarity"""
-    
-    def __init__(self, capacity=10000, alpha=0.6, beta=0.4):
-        self.capacity = capacity
-        self.alpha = alpha
-        self.beta = beta
-        self.buffer = []
-        self.priorities = deque(maxlen=capacity)
-        self.embeddings = deque(maxlen=capacity)
-        self.position = 0
-        
-    def add(self, experience, embedding, priority=1.0):
-        """Add experience with its embedding and priority"""
-        if len(self.buffer) < self.capacity:
-            self.buffer.append(experience)
-            self.embeddings.append(embedding)
-            self.priorities.append(priority)
-        else:
-            self.buffer[self.position] = experience
-            self.embeddings[self.position] = embedding
-            self.priorities[self.position] = priority
-            self.position = (self.position + 1) % self.capacity
-    
-    def compute_similarity_priority(self, new_embedding):
-        """Compute priority based on embedding similarity"""
-        if len(self.embeddings) == 0:
-            return 1.0
-            
-        similarities = []
-        for stored_embedding in self.embeddings:
-            # Cosine similarity
-            cos_sim = t.nn.functional.cosine_similarity(
-                new_embedding.flatten().unsqueeze(0),
-                stored_embedding.flatten().unsqueeze(0)
-            )
-            similarities.append(cos_sim.item())
-        
-        # Higher priority for more novel (less similar) experiences
-        max_similarity = max(similarities)
-        priority = 1.0 - max_similarity
-        return max(0.1, priority)  # Minimum priority of 0.1
-    
-    def sample(self, batch_size):
-        """Sample batch with prioritized sampling"""
-        if len(self.buffer) == 0:
-            return [], []
-            
-        # Convert priorities to probabilities
-        priorities = np.array(list(self.priorities))
-        probs = priorities ** self.alpha
-        probs /= probs.sum()
-        
-        # Sample indices
-        indices = np.random.choice(len(self.buffer), batch_size, p=probs, replace=True)
-        
-        # Calculate importance sampling weights
-        weights = (len(self.buffer) * probs[indices]) ** (-self.beta)
-        weights /= weights.max()
-        
-        batch = [self.buffer[i] for i in indices]
-        return batch, weights
+# Import DreamerV3 modules from dedicated folder
+from .dreamerv3 import PERBuffer, DreamerV3Wrapper
 
-class DreamerV3Wrapper:
-    """Wrapper for DreamerV3 dynamics and behavior learning"""
-    
-    def __init__(self, obs_space, act_space, config_path=None):
-        # Load DreamerV3 config
-        if config_path is None:
-            config_path = '/home/hail/Project/dreamerv3_jax/dreamerv3/configs.yaml'
-        
-        # Initialize DreamerV3 agent
-        self.agent = dreamer_agent.Agent(obs_space, act_space, config=self._load_config())
-        self.replay_buffer = PERBuffer()
-        
-    def _load_config(self):
-        """Load DreamerV3 config"""
-        # 간단한 기본 config
-        class Config:
-            def __init__(self):
-                self.enc = type('obj', (object,), {'typ': 'simple'})()
-                self.dyn = type('obj', (object,), {'typ': 'rssm'})()
-                self.dec = type('obj', (object,), {'typ': 'simple'})()
-                self.loss_scales = {'rec': 1.0, 'dyn': 1.0, 'rep': 1.0}
-                self.imag_length = 15
-                self.imag_last = None
-                
-        return Config()
-    
-    def dynamics_learning(self, batch_data):
-        """Perform dynamics learning with new batch"""
-        print("🔄 Starting DreamerV3 dynamics learning...")
-        
-        # Convert batch data to DreamerV3 format if needed
-        # This would need to be implemented based on your data format
-        formatted_data = self._format_batch_for_dreamer(batch_data)
-        
-        # Train world model (dynamics)
-        carry = self.agent.init_train(batch_size=len(batch_data))
-        carry, outputs, metrics = self.agent.train(carry, formatted_data)
-        
-        print(f"✅ Dynamics learning completed. Loss: {metrics.get('loss/total', 'N/A')}")
-        return carry, outputs, metrics
-    
-    def behavior_learning(self, carry):
-        """Perform behavior learning using imagination"""
-        print("🧠 Starting DreamerV3 behavior learning...")
-        
-        # This uses the imagination mechanism from DreamerV3
-        # The actual implementation would depend on your specific setup
-        
-        print("✅ Behavior learning completed.")
-        return carry
-    
-    def _format_batch_for_dreamer(self, batch_data):
-        """Convert batch data to DreamerV3 expected format"""
-        # This would need to be implemented based on your specific data format
-        # For now, return a placeholder
-        return batch_data
+# For DreamerV3 Space objects
+import elements
+
 
 def train(
     model: TrajectoryTransformer,
@@ -173,24 +56,26 @@ def train(
     model = model.to(device)
     mode = offline_config.mode
 
-    # Check gradient
-    for name, param in model.named_parameters():
-        if param.requires_grad:
-            print(f"✅ Will update: {name}")
-
-    # Initialize DreamerV3 and PER buffer
-    print("🚀 Initializing DreamerV3 and PER buffer...")
     try:
-        # Create dummy spaces for DreamerV3 (adjust based on your environment)
-        obs_space = {'observation': {'shape': (7, 7, 3), 'dtype': np.uint8}}
-        act_space = {'action': {'shape': (), 'dtype': np.int32, 'low': 0, 'high': 6}}
+        # Create proper spaces for DreamerV3 using elements.Space
+        obs_space = {
+            'observation': elements.Space(np.uint8, (64, 64, 3)),  # Standard DreamerV3 size
+            'reward': elements.Space(np.float32, ()),
+            'is_first': elements.Space(bool, ()),
+            'is_last': elements.Space(bool, ()),
+            'is_terminal': elements.Space(bool, ()),
+        }
+        act_space = {
+            'action': elements.Space(np.int32, (), 0, 6)
+        }
         
         dreamer_wrapper = DreamerV3Wrapper(obs_space, act_space)
         per_buffer = PERBuffer(capacity=10000)
         
-        print("✅ DreamerV3 and PER buffer initialized successfully!")
     except Exception as e:
         print(f"⚠️ Failed to initialize DreamerV3: {e}")
+        import traceback
+        traceback.print_exc()
         dreamer_wrapper = None
         per_buffer = PERBuffer(capacity=10000)
 
@@ -199,17 +84,9 @@ def train(
     for task_id, dataset in trajectory_data_set.items():
         print(f"Task {task_id}: {len(dataset)} 샘플")
 
-    # 🟢 모든 task의 dataset을 하나의 ConcatDataset으로 결합
-    # combined_dataset = ConcatDataset(list(trajectory_data_set.values()))
-    # train_dataloader, test_dataloader = get_dataloaders(
-    #     combined_dataset, offline_config
-    # )
-
     train_dataloader, test_dataloader = get_dataloaders(
         trajectory_data_set, offline_config
     )
-
-   
     
     # get optimizer from string
     optimizer = configure_optimizers(model, offline_config)
@@ -217,11 +94,6 @@ def train(
     scheduler_config = asdict(offline_config)
     del scheduler_config["optimizer"]
 
-    # get total number of training steps.
-
-    # scheduler_config["training_steps"] = (
-    #     offline_config.train_epochs * train_batches_per_epoch
-    # )
     scheduler = get_scheduler(
         offline_config.scheduler, optimizer, **scheduler_config
     )
@@ -387,11 +259,6 @@ def train(
                     acc = task_correct[tid] / task_total[tid]
                     wandb.log({f"train/MLP_task{tid}_accuracy": acc})
 
-            # 🔍 여기서 gradient 확인 penultimate_0,1,3,5,6,8, output_0
-            for name, param in model.named_parameters():
-                if param.requires_grad and param.grad is not None:
-                    print(f"{name}: grad mean = {param.grad.abs().mean().item():.6f}")
-
             optimizer.zero_grad()
             task_loss.backward()
             optimizer.step()
@@ -432,16 +299,25 @@ def test(
 
     # Initialize DreamerV3 and PER buffer for test function
     try:
-        # Create dummy spaces for DreamerV3 (adjust based on your environment)
-        obs_space = {'observation': {'shape': (7, 7, 3), 'dtype': np.uint8}}
-        act_space = {'action': {'shape': (), 'dtype': np.int32, 'low': 0, 'high': 6}}
+        # Create proper spaces for DreamerV3 using elements.Space
+        obs_space = {
+            'observation': elements.Space(np.uint8, (64, 64, 3)),  # Standard DreamerV3 size
+            'reward': elements.Space(np.float32, ()),
+            'is_first': elements.Space(bool, ()),
+            'is_last': elements.Space(bool, ()),
+            'is_terminal': elements.Space(bool, ()),
+        }
+        act_space = {
+            'action': elements.Space(np.int32, (), 0, 6)
+        }
         
         dreamer_wrapper = DreamerV3Wrapper(obs_space, act_space)
         per_buffer = PERBuffer(capacity=10000)
         
-        print("✅ DreamerV3 and PER buffer initialized for testing!")
     except Exception as e:
         print(f"⚠️ Failed to initialize DreamerV3 for testing: {e}")
+        import traceback
+        traceback.print_exc()
         dreamer_wrapper = None
         per_buffer = PERBuffer(capacity=10000)
 
@@ -522,10 +398,8 @@ def test(
                 task_shift_detected = False
                 task_id = task_id.to(task_preds.device)
                 task_loss += model.label_smoothing_loss(task_preds, task_id, class_weights=class_weights).item()
-
-                print('task_preds: ', task_preds)
+                
                 task_pred = t.argmax(task_preds, dim=-1)
-                print(f"task_pred: {task_pred}, task_id: {task_id}")
 
                 # Check Task Changing
                 recent_k = s.shape[0] // 16 # recent_k = 8
@@ -537,10 +411,6 @@ def test(
                 mean_task_probs = task_probs.mean(dim=0)  # (num_tasks,) = e.g., (3,)
 
                 max_prob, current_task = t.max(mean_task_probs, dim=-1)  # current_task: int (0~2)
-
-                print("mean_task_probs:", mean_task_probs)
-                print("max_prob:", max_prob)
-                print("current_task:", current_task)
 
                 if pre_task == current_task:
                     task_shift_detected = False
@@ -556,9 +426,7 @@ def test(
                     print("🚨 Task shift likely detected: previous =", pre_task, ", current =", current_task)
                     
                     # Task가 shifted되면 DreamerV3로 dynamics + behavior learning
-                    if dreamer_wrapper is not None:
-                        print("🔄 Performing DreamerV3 dynamics and behavior learning...")
-                        
+                    if dreamer_wrapper is not None:                       
                         # 새로운 배치 데이터 준비
                         current_batch = {
                             'states': s,
@@ -575,10 +443,25 @@ def test(
                             # 2. Behavior learning  
                             carry = dreamer_wrapper.behavior_learning(carry)
                             
-                            print("✅ DreamerV3 learning completed!")
-                            
                         except Exception as e:
                             print(f"⚠️ DreamerV3 learning failed: {e}")
+                            import traceback
+                            traceback.print_exc()
+                            
+                            # Debug: Check config structure
+                            if hasattr(dreamer_wrapper, 'agent') and hasattr(dreamer_wrapper.agent, 'config'):
+                                config = dreamer_wrapper.agent.config
+                                print(f"🔍 Config type: {type(config)}")
+                                print(f"🔍 Config has seed: {hasattr(config, 'seed')}")
+                                if hasattr(config, 'seed'):
+                                    print(f"🔍 Seed value: {config.seed}")
+                                print(f"🔍 Config keys: {dir(config) if hasattr(config, '__dict__') else 'No __dict__'}")
+                                if hasattr(config, '__dict__'):
+                                    print(f"🔍 Config dict: {config.__dict__}")
+                                elif hasattr(config, '_data'):
+                                    print(f"🔍 Config _data: {config._data}")
+                            else:
+                                print("🔍 No config found in dreamer_wrapper.agent")
 
                     # PER buffer에 experience와 embedding 저장
                     if per_buffer is not None and 'embeddings' in locals():
@@ -596,7 +479,6 @@ def test(
                         }
                         
                         per_buffer.add(experience, embeddings.cpu(), priority)
-                        print(f"💾 Added experience to PER buffer (priority: {priority:.3f})")
 
                 pre_task = current_task
 
@@ -769,7 +651,6 @@ def get_dataloaders(trajectory_data_set, offline_config):
     test_dataloader = DataLoader(test_dataset, batch_size=None)
 
     return train_dataloader, test_dataloader
-
 
 def match_task_ids(task_id, embedding_tensor):
     N = embedding_tensor.shape[0]
